@@ -53,7 +53,7 @@ import { UpdateInfo } from 'titanium-editor-commons/updates';
 import { registerTaskProviders, debugSessionInformation, DEBUG_SESSION_VALUE } from './tasks/tasksHelper';
 import { registerDebugProvider } from './debugger/titaniumDebugHelper';
 
-function activate (context: vscode.ExtensionContext): Promise<void> {
+function activate (context: vscode.ExtensionContext): undefined | Promise<void> {
 
 	Configuration.configure(context);
 
@@ -66,17 +66,19 @@ function activate (context: vscode.ExtensionContext): Promise<void> {
 	if (!project.isTitaniumProject()) {
 		vscode.commands.executeCommand(VSCodeCommands.SetContext, GlobalState.Enabled, false);
 		ExtensionContainer.context.globalState.update(GlobalState.Enabled, false);
-	} else {
-		setStatusBar();
-		project.onModified(async () => {
-			await Promise.all([
-				setStatusBar(),
-				generateCompletions()
-			]);
-		});
-		vscode.commands.executeCommand(VSCodeCommands.SetContext, GlobalState.Enabled, true);
-		ExtensionContainer.context.globalState.update(GlobalState.Enabled, true);
+		return;
 	}
+	setStatusBar();
+	project.onModified(async () => {
+		await Promise.all([
+			setStatusBar(),
+			generateCompletions()
+		]);
+	});
+	vscode.commands.executeCommand(VSCodeCommands.SetContext, GlobalState.Enabled, true);
+	ExtensionContainer.context.globalState.update(GlobalState.Enabled, true);
+
+	ExtensionContainer.telemetry.startSession();
 
 	const viewFilePattern = '**/app/{views,widgets}/**/*.xml';
 	const styleFilePattern = '**/*.tss';
@@ -318,7 +320,8 @@ exports.activate = activate; // eslint-disable-line no-undef
 /**
  * Deactivate
  */
-function deactivate (): void {
+async function deactivate () {
+	await ExtensionContainer.telemetry.endSession();
 	project.dispose();
 }
 exports.deactivate = deactivate;  // eslint-disable-line no-undef
@@ -326,7 +329,8 @@ exports.deactivate = deactivate;  // eslint-disable-line no-undef
 /**
  * Initialise extension - fetch appc info
  */
-async function init (): Promise<void> {
+async function init () {
+	ExtensionContainer.telemetry.sendEvent('init');
 	const isEnabled = ExtensionContainer.context.globalState.get<boolean>(GlobalState.Enabled);
 	if (isEnabled) {
 		vscode.window.withProgress({ cancellable: false, location: vscode.ProgressLocation.Notification, title: 'Titanium' }, async progress => {

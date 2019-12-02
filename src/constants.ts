@@ -1,5 +1,7 @@
 export const ExtensionId = 'titanium';
 
+export const ExtensionQualifiedId = `axway.vscode-${ExtensionId}`;
+
 export enum VSCodeCommands {
 	OpenFolder = 'vscode.openFolder',
 	SetContext = 'setContext'
