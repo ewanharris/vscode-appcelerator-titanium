@@ -4,7 +4,7 @@ import * as path from 'path';
 import { Telemetry } from 'titanium-editor-commons';
 import appc, { Appc } from './appc';
 import { Config, configuration } from './configuration';
-import { ExtensionQualifiedId } from './constants';
+import { ExtensionQualifiedId, GlobalState } from './constants';
 import Terminal from './terminal';
 
 export class ExtensionContainer {
@@ -15,15 +15,16 @@ export class ExtensionContainer {
 	private static _runningTask: TaskExecution|undefined;
 	private static _telemetry: Telemetry;
 
-	public static inititalize (context: ExtensionContext, config: Config): void {
+	public static async inititalize (context: ExtensionContext, config: Config): Promise<void> {
 		this._appc = appc;
 		this._config = config;
 		this._context = context;
+		const enableTelemetry = await this._context.globalState.get<boolean>(GlobalState.TelemetryEnabled) === true;
 		this._telemetry = new Telemetry({
-			enabled: true,
-			environment: 'development',
+			enabled: enableTelemetry,
+			environment: process.env.EXTENSION_DEBUG ? 'development' : 'production',
 			guid: 'e49527c9-168f-47b4-97f2-13f218020b69',
-			productVersion: extensions.getExtension(ExtensionQualifiedId)!.packageJSON.version,
+			productVersion: extensions.getExtension(ExtensionQualifiedId)?.packageJSON.version,
 			persistDirectory: path.join(os.homedir(), '.titanium', 'vscode-telemetry')
 		});
 	}
@@ -64,5 +65,21 @@ export class ExtensionContainer {
 
 	static get runningTask (): TaskExecution|undefined {
 		return this._runningTask;
+	}
+
+	/**
+	 * Adds the packageId from the appc-cli.json to the event data file and sends the event
+	 *
+	 * @param {String} event - event name.
+	 * @param {Object} data - data to set in the body of the event.
+	 */
+	static async sendTelemetry (event: string, data: { [ key: string ]: unknown} = { }): Promise<void> {
+
+		const config = await this._appc.readConfig();
+		if (config?.packageId) {
+			data.packageId = config.packageId;
+		}
+
+		await this._telemetry.sendEvent(event, data);
 	}
 }

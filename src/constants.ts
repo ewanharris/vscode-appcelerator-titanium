@@ -16,7 +16,8 @@ export enum GlobalState {
 	Liveview = 'titanium:liveview',
 	Running = 'titanium:build:running',
 	LastUpdateCheck = 'titanium:update:lastCheck',
-	HasUpdates = 'titanium:update:hasUpdates'
+	HasUpdates = 'titanium:update:hasUpdates',
+	TelemetryEnabled = 'titanium:telemetry:enabled'
 }
 
 export enum WorkspaceState {

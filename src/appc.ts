@@ -406,6 +406,13 @@ export class Appc {
 		}
 	}
 
+	public async readConfig (): Promise<{ expiry: number; packageId: string } | undefined> {
+		const sessionPath = path.join(homedir(), '.appcelerator/appc-cli.json');
+		if (await fs.pathExists(sessionPath)) {
+			return JSON.parse(await fs.readFile(sessionPath, 'utf8'));
+		}
+	}
+
 	/**
 	 * Returns appc CLI session for current user.
 	 *

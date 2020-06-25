@@ -53,13 +53,15 @@ import { UpdateInfo } from 'titanium-editor-commons/updates';
 import { registerTaskProviders, debugSessionInformation, DEBUG_SESSION_VALUE } from './tasks/tasksHelper';
 import { registerDebugProvider } from './debugger/titaniumDebugHelper';
 
-function activate (context: vscode.ExtensionContext): undefined | Promise<void> {
+async function activate (context: vscode.ExtensionContext): Promise<void> {
 
 	Configuration.configure(context);
 
 	const config = configuration.get<Config>();
 
-	ExtensionContainer.inititalize(context, config);
+	await ExtensionContainer.inititalize(context, config);
+	await promptForTelemetry();
+
 	project.load();
 	definitionProviderHelper.activate(context);
 
@@ -594,5 +596,22 @@ async function installUpdates (updateInfo: UpdateChoice[] | UpdateInfo[], progre
 			}
 		}
 		counter++;
+	}
+}
+
+async function promptForTelemetry (): Promise<void> {
+	const telemetryEnabled = ExtensionContainer.context.globalState.get<boolean>(GlobalState.TelemetryEnabled);
+
+	// If we have set the value already, don't re-prompt
+	if (telemetryEnabled === true || telemetryEnabled === false) {
+		return;
+	}
+
+	const enable = await vscode.window.showInformationMessage('Would you like to help us improve the Titanium Extension by allowing us to collect usage data? View our privacy statement [here](https://www.axway.com/en/privacy-statement)', { title: 'Yes' }, { title: 'No' });
+
+	if (enable?.title.toLowerCase() === 'yes') {
+		ExtensionContainer.context.globalState.update(GlobalState.TelemetryEnabled, true);
+	} else if (enable?.title.toLowerCase() === 'no') {
+		ExtensionContainer.context.globalState.update(GlobalState.TelemetryEnabled, false);
 	}
 }

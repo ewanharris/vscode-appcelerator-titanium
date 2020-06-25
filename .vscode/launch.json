@@ -6,6 +6,9 @@
             "type": "extensionHost",
             "request": "launch",
             "runtimeExecutable": "${execPath}",
+            "env": {
+                "EXTENSION_DEBUG": "1"
+            },
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}"
             ],
