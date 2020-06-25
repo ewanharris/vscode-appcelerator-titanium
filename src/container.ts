@@ -74,12 +74,15 @@ export class ExtensionContainer {
 	 * @param {Object} data - data to set in the body of the event.
 	 */
 	static async sendTelemetry (event: string, data: { [ key: string ]: unknown} = { }): Promise<void> {
+		try {
+			const config = await this._appc.readConfig();
+			if (config?.packageId) {
+				data.packageId = config.packageId;
+			}
 
-		const config = await this._appc.readConfig();
-		if (config?.packageId) {
-			data.packageId = config.packageId;
+			await this._telemetry.sendEvent(event, data);
+		} catch (error) {
+			// ignore
 		}
-
-		await this._telemetry.sendEvent(event, data);
 	}
 }

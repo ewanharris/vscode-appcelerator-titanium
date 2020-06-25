@@ -40,6 +40,9 @@ export async function createModule (): Promise<void> {
 			platforms,
 			workspaceDir: workspaceDir.fsPath,
 		});
+
+		ExtensionContainer.sendTelemetry('module.create');
+
 		await ExtensionContainer.terminal.runCommandInBackground(args, { cancellable: false, location: ProgressLocation.Notification, title: 'Creating module' });
 		// TODO: Once workspace support is figured out, add an "add to workspace command"
 		const dialog = await window.showInformationMessage('Project created. Would you like to open it?', { title: 'Open Project' });

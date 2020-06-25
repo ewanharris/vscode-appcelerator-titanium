@@ -568,6 +568,11 @@ async function installUpdates (updateInfo: UpdateChoice[] | UpdateInfo[], progre
 					increment: 100 / totalUpdates
 				});
 			}
+			ExtensionContainer.sendTelemetry('product.install', {
+				product: label,
+				previous: update.currentVersion,
+				new: update.latestVersion
+			});
 		} catch (error) {
 			progress.report({
 				message: `Failed to install ${label} (${counter}/${totalUpdates})`

@@ -42,6 +42,9 @@ export async function createApplication (): Promise<void> {
 			platforms,
 			workspaceDir: workspaceDir.fsPath,
 		});
+
+		ExtensionContainer.sendTelemetry('app.create');
+
 		await ExtensionContainer.terminal.runCommandInBackground(args, { cancellable: false, location: ProgressLocation.Notification, title: 'Creating application' });
 		// TODO: Once workspace support is figured out, add an "add to workspace command"
 		const dialog = await window.showInformationMessage('Project created. Would you like to open it?', { title: 'Open Project' });

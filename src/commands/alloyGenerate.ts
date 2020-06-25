@@ -6,6 +6,7 @@ import { window, workspace } from 'vscode';
 import { inputBox, quickPick } from '../quickpicks';
 import { capitalizeFirstLetter } from '../utils';
 import { UserCancellation } from './common';
+import { ExtensionContainer } from '../container';
 
 export enum AlloyModelAdapterType {
 	Properties = 'properties',
@@ -85,6 +86,9 @@ export async function generateComponent (type: AlloyComponentType, folder: Alloy
 			}
 
 		}
+
+		ExtensionContainer.sendTelemetry(`alloy.generate.${type}`);
+
 	} catch (error) {
 		if (error instanceof UserCancellation) {
 			return;
@@ -115,6 +119,9 @@ export async function generateModel (): Promise<void> {
 				await window.showTextDocument(document);
 			}
 		}
+
+		ExtensionContainer.sendTelemetry('alloy.generate.model');
+
 	} catch (error) {
 		if (error instanceof UserCancellation) {
 			return;
