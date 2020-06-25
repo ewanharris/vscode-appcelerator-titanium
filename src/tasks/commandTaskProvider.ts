@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
-import { TaskExecutionContext, Platform, ProjectType } from './tasksHelper';
+import { TaskExecutionContext, Platform, ProjectType, TitaniumTaskTypes } from './tasksHelper';
 import { TaskPseudoTerminal, CommandError } from './taskPseudoTerminal';
 import { TaskHelper, Helpers } from './helpers';
 import { UserCancellation, handleInteractionError, InteractionError, checkLogin } from '../commands/common';
 import { LogLevel } from '../types/common';
+import { ExtensionContainer } from '../container';
+import { AppBuildTaskTitaniumBuildBase } from './buildTaskProvider';
 
 function getPlatform (task: TitaniumTaskBase): Platform {
 	if (task.definition.titaniumBuild.platform === 'android' || task.definition.titaniumBuild.android !== undefined) {
@@ -14,6 +16,14 @@ function getPlatform (task: TitaniumTaskBase): Platform {
 		throw new Error(`Unknown platform ${task.definition.titaniumBuild.platform}`);
 	} else {
 		throw new Error('Invalid configuration, please specify a platform');
+	}
+}
+
+function isAppBuild(titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuildBase): titaniumBuild is AppBuildTaskTitaniumBuildBase {
+	if (titaniumBuild.projectType === 'app') {
+		return true;
+	} else {
+		return false;
 	}
 }
 
@@ -92,5 +102,20 @@ export abstract class CommandTaskProvider implements vscode.TaskProvider {
 
 	public getHelper (platform: Platform): TaskHelper {
 		return this.helpers[platform];
+	}
+
+	public sendTelemetry (type: TitaniumTaskTypes, titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuildBase): void {
+		let eventName = `${type.replace('titanium-', '')}.${titaniumBuild.projectType}.${titaniumBuild.platform}`;
+		if (isAppBuild(titaniumBuild)) {
+			if (titaniumBuild.debug) {
+				eventName = `${eventName}.debug`;
+			}
+			eventName = `${eventName}.${titaniumBuild.target?.replace('dist-', '')}`;
+		}
+		try {
+			ExtensionContainer.sendTelemetry(eventName);
+		} catch (error) {
+			// do nothing
+		}
 	}
 }
