@@ -569,7 +569,7 @@ async function installUpdates (updateInfo: UpdateChoice[] | UpdateInfo[], progre
 				});
 			}
 			ExtensionContainer.sendTelemetry('product.install', {
-				product: label,
+				product: update.productName,
 				previous: update.currentVersion,
 				new: update.latestVersion
 			});
