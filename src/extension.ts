@@ -53,7 +53,7 @@ import { UpdateInfo } from 'titanium-editor-commons/updates';
 import { registerTaskProviders, debugSessionInformation, DEBUG_SESSION_VALUE } from './tasks/tasksHelper';
 import { registerDebugProvider } from './debugger/titaniumDebugHelper';
 
-async function activate (context: vscode.ExtensionContext): Promise<void> {
+export async function activate (context: vscode.ExtensionContext): Promise<void> {
 
 	Configuration.configure(context);
 
@@ -317,21 +317,18 @@ async function activate (context: vscode.ExtensionContext): Promise<void> {
 	return init();
 }
 
-exports.activate = activate; // eslint-disable-line no-undef
-
 /**
  * Deactivate
  */
-async function deactivate () {
-	await ExtensionContainer.telemetry.endSession();
+export  async function deactivate (): Promise<void> {
 	project.dispose();
+	return await ExtensionContainer.telemetry.endSession();
 }
-exports.deactivate = deactivate;  // eslint-disable-line no-undef
 
 /**
  * Initialise extension - fetch appc info
  */
-async function init () {
+async function init (): Promise<void> {
 	ExtensionContainer.telemetry.sendEvent('init');
 	const isEnabled = ExtensionContainer.context.globalState.get<boolean>(GlobalState.Enabled);
 	if (isEnabled) {
