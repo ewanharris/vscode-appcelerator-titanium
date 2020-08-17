@@ -6,6 +6,7 @@ import appc, { Appc } from './appc';
 import { Config, configuration } from './configuration';
 import { ExtensionQualifiedId, GlobalState } from './constants';
 import Terminal from './terminal';
+import { ClassifiedEvent, PropertyData, GDPRProperty, StrictPropertyCheck, BaseEventMetrics } from './types/telemetry';
 
 export class ExtensionContainer {
 	private static _appc: Appc;
@@ -73,14 +74,25 @@ export class ExtensionContainer {
 	 * @param {String} event - event name.
 	 * @param {Object} data - data to set in the body of the event.
 	 */
-	static async sendTelemetry (event: string, data: { [ key: string ]: unknown} = { }): Promise<void> {
+	static async publicLog2<
+		E extends ClassifiedEvent<T> = never,
+		T extends { [_ in keyof T]: PropertyData | GDPRProperty | undefined } = never
+	>(
+		event: string,
+		data?: StrictPropertyCheck<
+		E,
+		ClassifiedEvent<T>,
+		E
+		>
+	): Promise<void> {
+		const baseData: Partial<BaseEventMetrics> = {};
 		try {
 			const config = await this._appc.readConfig();
 			if (config?.packageId) {
-				data.packageId = config.packageId;
+				baseData.packageId = config.packageId;
 			}
 
-			await this._telemetry.sendEvent(event, data);
+			await this._telemetry.sendEvent(event, { ...baseData, ...data as object });
 		} catch (error) {
 			// ignore
 		}

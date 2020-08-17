@@ -7,6 +7,7 @@ import { ExtensionContainer } from '../container';
 import { inputBox, selectCreationLocation, selectPlatforms, yesNoQuestion } from '../quickpicks';
 import { createModuleArguments, validateAppId } from '../utils';
 import { checkLogin, handleInteractionError, InteractionError } from './common';
+import { CreationEventMetrics, CreationEventClassification } from '../types/telemetry';
 
 export async function createModule (): Promise<void> {
 	try {
@@ -41,7 +42,9 @@ export async function createModule (): Promise<void> {
 			workspaceDir: workspaceDir.fsPath,
 		});
 
-		ExtensionContainer.sendTelemetry('module.create');
+		ExtensionContainer.publicLog2<CreationEventMetrics, CreationEventClassification>('module.create', {
+			platforms
+		});
 
 		await ExtensionContainer.terminal.runCommandInBackground(args, { cancellable: false, location: ProgressLocation.Notification, title: 'Creating module' });
 		// TODO: Once workspace support is figured out, add an "add to workspace command"

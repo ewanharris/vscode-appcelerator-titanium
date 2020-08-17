@@ -6,6 +6,7 @@ import { UserCancellation, handleInteractionError, InteractionError, checkLogin 
 import { LogLevel } from '../types/common';
 import { ExtensionContainer } from '../container';
 import { AppBuildTaskTitaniumBuildBase } from './buildTaskProvider';
+import { BaseEventClassification } from '../types/telemetry';
 
 function getPlatform (task: TitaniumTaskBase): Platform {
 	if (task.definition.titaniumBuild.platform === 'android' || task.definition.titaniumBuild.android !== undefined) {
@@ -113,7 +114,7 @@ export abstract class CommandTaskProvider implements vscode.TaskProvider {
 			eventName = `${eventName}.${titaniumBuild.target?.replace('dist-', '')}`;
 		}
 		try {
-			ExtensionContainer.sendTelemetry(eventName);
+			ExtensionContainer.publicLog2<{}, BaseEventClassification>(eventName);
 		} catch (error) {
 			// do nothing
 		}

@@ -52,6 +52,7 @@ import { UpdateInfo } from 'titanium-editor-commons/updates';
 
 import { registerTaskProviders, debugSessionInformation, DEBUG_SESSION_VALUE } from './tasks/tasksHelper';
 import { registerDebugProvider } from './debugger/titaniumDebugHelper';
+import { ProductInstallEventMetrics, BaseEventClassification, ProductInstallEventClassification } from './types/telemetry';
 
 export async function activate (context: vscode.ExtensionContext): Promise<void> {
 
@@ -565,7 +566,7 @@ async function installUpdates (updateInfo: UpdateChoice[] | UpdateInfo[], progre
 					increment: 100 / totalUpdates
 				});
 			}
-			ExtensionContainer.sendTelemetry('product.install', {
+			ExtensionContainer.publicLog2<ProductInstallEventMetrics, ProductInstallEventClassification>('product.install', {
 				product: update.productName,
 				previous: update.currentVersion,
 				new: update.latestVersion

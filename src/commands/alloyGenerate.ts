@@ -7,6 +7,7 @@ import { inputBox, quickPick } from '../quickpicks';
 import { capitalizeFirstLetter } from '../utils';
 import { UserCancellation } from './common';
 import { ExtensionContainer } from '../container';
+import { AlloyGenerateMetrics, AlloyGenerateEventClassification } from '../types/telemetry';
 
 export enum AlloyModelAdapterType {
 	Properties = 'properties',
@@ -87,7 +88,9 @@ export async function generateComponent (type: AlloyComponentType, folder: Alloy
 
 		}
 
-		ExtensionContainer.sendTelemetry(`alloy.generate.${type}`);
+		ExtensionContainer.publicLog2<AlloyGenerateMetrics, AlloyGenerateEventClassification>('alloy.generate', {
+			type
+		});
 
 	} catch (error) {
 		if (error instanceof UserCancellation) {
@@ -120,7 +123,9 @@ export async function generateModel (): Promise<void> {
 			}
 		}
 
-		ExtensionContainer.sendTelemetry('alloy.generate.model');
+		ExtensionContainer.publicLog2<AlloyGenerateMetrics, AlloyGenerateEventClassification>('alloy.generate', {
+			type: 'model'
+		});
 
 	} catch (error) {
 		if (error instanceof UserCancellation) {
