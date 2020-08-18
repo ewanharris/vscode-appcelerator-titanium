@@ -27,7 +27,7 @@ generateTelemetryData()
 		const taskTemplate = await fs.readFile(path.join(__dirname, 'templates', 'tasks.md.ejs'), 'utf8');
 		const taskContents = ejs.render(taskTemplate, renderObject);
 		await fs.writeFile(path.join(__dirname, '..', 'doc', 'tasks.md'), taskContents);
-		console.log(renderObject.telemetryData.eventsWithExtraData);
+
 		const telemetryTemplate = await fs.readFile(path.join(__dirname, 'templates', 'telemetry.md.ejs'), 'utf8');
 		const telemetryContents = ejs.render(telemetryTemplate, renderObject);
 		await fs.writeFile(path.join(__dirname, '..', 'doc', 'telemetry.md'), telemetryContents);

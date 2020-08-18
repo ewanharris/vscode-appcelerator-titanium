@@ -11,6 +11,8 @@ This extension sends telemetry data to the AMPLIFY Platform to help us understan
 
 The following are the events sent by the extension:
 
+* distribute
+* run
 * module.create
 * app.create
 * alloy.generate
@@ -20,44 +22,60 @@ The following are the events sent by the extension:
 
 The following data is sent in every telemetry event:
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
-| event | undefined | SystemMetaData | FeatureInsight |
-| distribution.version | undefined | SystemMetaData | FeatureInsight |
-| hardware.arch | undefined | EndUserPseudonymizedInformation | FeatureInsight |
-| hardware.id | undefined | EndUserPseudonymizedInformation | FeatureInsight |
-| os.name | undefined | SystemMetaData | FeatureInsight |
-| os.version | undefined | SystemMetaData | FeatureInsight |
-| data | undefined | SystemMetaData | FeatureInsight |
-| packageid | undefined | EndUserPseudonymizedInformation | FeatureInsight |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| event | SystemMetaData | FeatureInsight |
+| distribution.version | SystemMetaData | FeatureInsight |
+| hardware.arch | EndUserPseudonymizedInformation | FeatureInsight |
+| hardware.id | EndUserPseudonymizedInformation | FeatureInsight |
+| os.name | SystemMetaData | FeatureInsight |
+| os.version | SystemMetaData | FeatureInsight |
+| data | SystemMetaData | FeatureInsight |
+| packageid | EndUserPseudonymizedInformation | FeatureInsight |
 
 ### Event Specific Data
 
 The following events send additional data:
 
+#### distribute
+
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| projecttype | SystemMetaData | FeatureInsight |
+| target | SystemMetaData | FeatureInsight |
+| platform | SystemMetaData | FeatureInsight |
+
+#### run
+
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| projecttype | SystemMetaData | FeatureInsight |
+| target | SystemMetaData | FeatureInsight |
+| platform | SystemMetaData | FeatureInsight |
+
 #### module.create
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
-| platforms | undefined | SystemMetaData | FeatureInsight |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| platforms | SystemMetaData | FeatureInsight |
 
 #### app.create
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
-| enableservices | undefined | SystemMetaData | FeatureInsight |
-| platforms | undefined | SystemMetaData | FeatureInsight |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| enableservices | SystemMetaData | FeatureInsight |
+| platforms | SystemMetaData | FeatureInsight |
 
 #### alloy.generate
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
-| type | undefined | SystemMetaData | FeatureInsight |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| type | SystemMetaData | FeatureInsight |
 
 #### product.install
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
-| product | undefined | SystemMetaData | FeatureInsight |
-| previous | undefined | SystemMetaData | FeatureInsight |
-| new | undefined | SystemMetaData | FeatureInsight |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+| product | SystemMetaData | FeatureInsight |
+| previous | SystemMetaData | FeatureInsight |
+| new | SystemMetaData | FeatureInsight |

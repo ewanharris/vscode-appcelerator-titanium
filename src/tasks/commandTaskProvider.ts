@@ -6,7 +6,7 @@ import { UserCancellation, handleInteractionError, InteractionError, checkLogin 
 import { LogLevel } from '../types/common';
 import { ExtensionContainer } from '../container';
 import { AppBuildTaskTitaniumBuildBase } from './buildTaskProvider';
-import { BaseEventClassification } from '../types/telemetry';
+import { BuildEventMetrics, BuildEventClassification } from '../types/telemetry';
 
 function getPlatform (task: TitaniumTaskBase): Platform {
 	if (task.definition.titaniumBuild.platform === 'android' || task.definition.titaniumBuild.android !== undefined) {
@@ -26,6 +26,10 @@ function isAppBuild(titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuild
 	} else {
 		return false;
 	}
+}
+
+function isDistributionBuild (taskType: TitaniumTaskTypes): boolean {
+	return taskType === 'titanium-package';
 }
 
 export interface TitaniumTaskBase extends vscode.Task {
@@ -106,15 +110,21 @@ export abstract class CommandTaskProvider implements vscode.TaskProvider {
 	}
 
 	public sendTelemetry (type: TitaniumTaskTypes, titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuildBase): void {
-		let eventName = `${type.replace('titanium-', '')}.${titaniumBuild.projectType}.${titaniumBuild.platform}`;
+		const eventData: BuildEventMetrics = {
+			platform: titaniumBuild.platform,
+			projectType: titaniumBuild.projectType,
+		};
+
 		if (isAppBuild(titaniumBuild)) {
-			if (titaniumBuild.debug) {
-				eventName = `${eventName}.debug`;
-			}
-			eventName = `${eventName}.${titaniumBuild.target?.replace('dist-', '')}`;
+			eventData.target = titaniumBuild.target;
 		}
+
 		try {
-			ExtensionContainer.publicLog2<{}, BaseEventClassification>(eventName);
+			if (isDistributionBuild(type)) {
+				ExtensionContainer.publicLog2<BuildEventMetrics, BuildEventClassification>('distribute', eventData);
+			} else {
+				ExtensionContainer.publicLog2<BuildEventMetrics, BuildEventClassification>('run', eventData);
+			}
 		} catch (error) {
 			// do nothing
 		}

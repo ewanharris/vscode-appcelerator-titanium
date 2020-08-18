@@ -19,10 +19,10 @@ The following are the events sent by the extension:
 
 The following data is sent in every telemetry event:
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
 <% Object.entries(telemetryData.common).forEach(([ name, property ]) => {  -%>
-<%- `| ${name} | ${property.description} | ${property.classification} | ${property.purpose} |` %>
+<%- `| ${name} | ${property.classification} | ${property.purpose} |` %>
 <% }); -%>
 
 ### Event Specific Data
@@ -32,17 +32,9 @@ The following events send additional data:
 
 <%- `#### ${name}` %>
 
-| Name | Description | Classification | Purpose |
-| -----| ----------- | -------------- |-------- |
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
 <% data.forEach((property) => {  -%>
-<%- `| ${property.name} | ${property.description} | ${property.classification} | ${property.purpose} |` %>
+<%- `| ${property.name} | ${property.classification} | ${property.purpose} |` %>
 <% }); -%>
 <% }); -%>
-
-When we send telemetry data we send the following data in every event:
-
-* The OS name and version
-* An anonymous hardware ID
-* The extensions version
-
-We might also include extra information in

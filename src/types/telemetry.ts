@@ -78,6 +78,18 @@ export interface AppCreationEventMetrics extends CreationEventMetrics {
 	enableServices: boolean;
 }
 
+export interface BuildEventClassification extends BaseEventClassification {
+	projectType: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'};
+	target: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'};
+	platform: { classification: 'SystemMetaData'; purpose: 'FeatureInsight'};
+}
+
+export interface BuildEventMetrics {
+	platform: string;
+	projectType?: 'app' | 'module';
+	target?: string;
+}
+
 export interface ProductInstallEventClassification extends BaseEventClassification {
 	product: { classification: 'SystemMetaData'; purpose: 'FeatureInsight' };
 	previous: { classification: 'SystemMetaData'; purpose: 'FeatureInsight' };
