@@ -48,10 +48,14 @@ export interface BaseEventClassification {
 	data: { classification: 'SystemMetaData'; purpose: 'FeatureInsight' };
 	// Properties added by this extension
 	packageId?: { classification: 'EndUserPseudonymizedInformation'; purpose: 'FeatureInsight' };
+	vsCodeVersion: { classification: 'SystemMetaData'; purpose: 'FeatureInsight' };
 }
 
-export interface BaseEventMetrics extends Event {
+// Extend event as a partial because we know the properties from there will be added eventually,
+// but we still want the required values from this extension to be enforced by tsc
+export interface BaseEventMetrics extends Partial<Event> {
 	packageId?: string;
+	vsCodeVersion: string;
 }
 
 export interface AlloyGenerateEventClassification extends BaseEventClassification {

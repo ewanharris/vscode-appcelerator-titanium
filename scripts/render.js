@@ -247,6 +247,10 @@ async function generateTelemetryData () {
 			packageid: {
 				classification: 'EndUserPseudonymizedInformation',
 				purpose: 'FeatureInsight'
+			},
+			vscodeversion: {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
 			}
 		},
 		eventNames: [ ],

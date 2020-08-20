@@ -1,4 +1,4 @@
-import { ExtensionContext, TaskExecution, extensions } from 'vscode';
+import { ExtensionContext, TaskExecution, extensions, version as vsCodeVersion } from 'vscode';
 import * as os from 'os';
 import * as path from 'path';
 import { Telemetry } from 'titanium-editor-commons';
@@ -85,7 +85,9 @@ export class ExtensionContainer {
 		E
 		>
 	): Promise<void> {
-		const baseData: Partial<BaseEventMetrics> = {};
+		const baseData: BaseEventMetrics = {
+			vsCodeVersion
+		};
 		try {
 			const config = await this._appc.readConfig();
 			if (config?.packageId) {

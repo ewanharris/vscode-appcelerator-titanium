@@ -32,6 +32,7 @@ The following data is sent in every telemetry event:
 | os.version | SystemMetaData | FeatureInsight |
 | data | SystemMetaData | FeatureInsight |
 | packageid | EndUserPseudonymizedInformation | FeatureInsight |
+| vscodeversion | SystemMetaData | FeatureInsight |
 
 ### Event Specific Data
 
