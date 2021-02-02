@@ -4,6 +4,7 @@ import { CommandTaskProvider, TitaniumTaskBase, TitaniumTaskDefinitionBase, Tita
 import { Helpers } from './helpers';
 import { TaskExecutionContext } from './tasksHelper';
 import { selectDistributionTarget } from '../quickpicks/build/common';
+import { Command } from './commandBuilder';
 
 export interface PackageTask extends TitaniumTaskBase {
 	definition: PackageTaskDefinitionBase;
@@ -32,7 +33,7 @@ export class PackageTaskProvider extends CommandTaskProvider {
 		super('titanium-package', helpers);
 	}
 
-	public async resolveTaskInformation (context: TaskExecutionContext, task: PackageTask): Promise<string> {
+	public async resolveTaskInformation (context: TaskExecutionContext, task: PackageTask): Promise<Command> {
 		const { definition } = task;
 
 		if (!definition.titaniumBuild.projectDir) {

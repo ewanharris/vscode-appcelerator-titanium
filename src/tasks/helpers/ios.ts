@@ -4,7 +4,7 @@ import { getCorrectCertificateName } from '../../utils';
 import project from '../../project';
 import { IosCertificateType, IosCert } from '../../types/common';
 import { TaskHelper } from './base';
-import { CommandBuilder } from '../commandBuilder';
+import { Command, CommandBuilder } from '../commandBuilder';
 import { BuildTaskDefinitionBase, AppBuildTaskTitaniumBuildBase, BuildTaskTitaniumBuildBase } from '../buildTaskProvider';
 import { AppPackageTaskTitaniumBuildBase, PackageTaskDefinitionBase, PackageTaskTitaniumBuildBase } from '../packageTaskProvider';
 import { WorkspaceState } from '../../constants';
@@ -39,7 +39,7 @@ export interface IosPackageTaskTitaniumBuildBase extends AppPackageTaskTitaniumB
 }
 export class IosHelper extends TaskHelper {
 
-	public async resolveAppBuildCommandLine (context: TaskExecutionContext, definition: IosBuildTaskTitaniumBuildBase): Promise<string> {
+	public async resolveAppBuildCommandLine (context: TaskExecutionContext, definition: IosBuildTaskTitaniumBuildBase): Promise<Command> {
 		const builder = CommandBuilder.create('appc', 'run');
 
 		await this.resolveCommonAppOptions(context, definition, builder);
@@ -82,7 +82,7 @@ export class IosHelper extends TaskHelper {
 		return builder.resolve();
 	}
 
-	public async resolveAppPackageCommandLine(context: TaskExecutionContext, definition: IosPackageTaskTitaniumBuildBase): Promise<string> {
+	public async resolveAppPackageCommandLine(context: TaskExecutionContext, definition: IosPackageTaskTitaniumBuildBase): Promise<Command> {
 		const builder = CommandBuilder.create('appc', 'run');
 
 		await this.resolveCommonPackagingOptions(context, definition, builder);
@@ -121,7 +121,7 @@ export class IosHelper extends TaskHelper {
 		return builder.resolve();
 	}
 
-	public async resolveModuleBuildCommandLine (context: TaskExecutionContext, definition: BuildTaskTitaniumBuildBase): Promise<string> {
+	public async resolveModuleBuildCommandLine (context: TaskExecutionContext, definition: BuildTaskTitaniumBuildBase): Promise<Command> {
 		const builder = CommandBuilder.create('appc', 'run');
 
 		this.resolveCommonOptions(context, definition, builder);
@@ -129,7 +129,7 @@ export class IosHelper extends TaskHelper {
 		return builder.resolve();
 	}
 
-	public async resolveModulePackageCommandLine (context: TaskExecutionContext, definition: PackageTaskTitaniumBuildBase): Promise<string> {
+	public async resolveModulePackageCommandLine (context: TaskExecutionContext, definition: PackageTaskTitaniumBuildBase): Promise<Command> {
 		const builder = CommandBuilder.create('appc', 'run');
 
 		this.resolveCommonOptions(context, definition, builder);
