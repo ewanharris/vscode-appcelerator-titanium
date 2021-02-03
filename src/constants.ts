@@ -1,5 +1,6 @@
 export const ExtensionName = 'titanium';
 export const ExtensionId = 'axway.vscode-titanium';
+export const TelemetryGuid = 'e49527c9-168f-47b4-97f2-13f218020b69';
 
 export enum VSCodeCommands {
 	OpenFolder = 'vscode.openFolder',
@@ -20,7 +21,8 @@ export enum GlobalState {
 	HasUpdates = 'titanium:update:hasUpdates',
 	RefreshEnvironment = 'titanium:environment:refresh',
 	MissingTooling = 'titanium:toolingMissing',
-	NotTitaniumProject = 'titanium:notProject'
+	NotTitaniumProject = 'titanium:notProject',
+	TelemetryEnabled = 'titanium:telemetry:enabled'
 }
 
 export enum WorkspaceState {

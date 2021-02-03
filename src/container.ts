@@ -1,15 +1,17 @@
-import { updates } from 'titanium-editor-commons';
+import { Telemetry, updates } from 'titanium-editor-commons';
 import { UpdateInfo } from 'titanium-editor-commons/updates';
 import * as vscode from 'vscode';
 import appc, { Appc } from './appc';
 import { Config, configuration } from './configuration';
-import { GlobalState, VSCodeCommands } from './constants';
+import { ExtensionId, GlobalState, TelemetryGuid, VSCodeCommands } from './constants';
 import { HelpExplorer } from './explorer/helpExplorer';
 import DeviceExplorer from './explorer/tiExplorer';
 import project from './project';
 import Terminal from './terminal';
 import { getNodeSupportedVersion } from './utils';
 
+import * as path from 'path';
+import { homedir } from 'os';
 export class ExtensionContainer {
 	private static _appc: Appc;
 	private static _buildExplorer: DeviceExplorer;
@@ -17,6 +19,7 @@ export class ExtensionContainer {
 	private static _context: vscode.ExtensionContext;
 	private static _helpExplorer: HelpExplorer;
 	private static _runningTask: vscode.TaskExecution|undefined;
+	private static _telemetry: Telemetry;
 	private static _terminal: Terminal;
 	private static _updateInfo: UpdateInfo[];
 
@@ -24,6 +27,15 @@ export class ExtensionContainer {
 		this._appc = appc;
 		this._config = config;
 		this._context = context;
+		const enableTelemetry = this._context.globalState.get<boolean>(GlobalState.TelemetryEnabled) === true;
+
+		this._telemetry = new Telemetry({
+			enabled: enableTelemetry,
+			environment: process.env.EXTENSION_DEBUG ? 'development' : 'production',
+			guid: TelemetryGuid,
+			productVersion: vscode.extensions.getExtension(ExtensionId)?.packageJSON.version,
+			persistDirectory: path.join(homedir(), '.titanium', 'vscode-telemetry')
+		});
 	}
 
 	static get appc (): Appc {
@@ -76,6 +88,10 @@ export class ExtensionContainer {
 		return this._helpExplorer;
 	}
 
+	static get telemetry (): Telemetry {
+		return this._telemetry;
+	}
+
 	/**
 	 * Updates the property in both VS Code context, for when clauses used in the package.json, and
 	 * also the globalSate for the ExtensionContext
@@ -116,5 +132,22 @@ export class ExtensionContainer {
 		}
 
 		return this._updateInfo;
+	}
+
+	static async sendTelemetry (event: string, data: Record<string, unknown> = {}): Promise<void> {
+		const baseData = {
+			vsCodeVersion: vscode.version
+		};
+
+		try {
+			const config = await this._appc.readConfig();
+			if (config?.packageId) {
+				data.packageId = config.packageId;
+			}
+			await this._telemetry.sendEvent(event, { ...baseData, ...data });
+		} catch (error) {
+			// ignore
+		}
+
 	}
 }

@@ -6,6 +6,9 @@
             "type": "extensionHost",
             "request": "launch",
             "runtimeExecutable": "${execPath}",
+            "env": {
+                "EXTENSION_DEBUG": "1"
+            },
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}"
             ],
@@ -27,6 +30,9 @@
             "request": "launch",
             "cwd": "${workspaceFolder}",
             "program": "${workspaceFolder}/src/debugger/titaniumDebugger.ts",
+            "env": {
+                "EXTENSION_DEBUG": "1"
+            },
             "args": [
                 "--server=4711"
             ],
@@ -46,6 +52,9 @@
             "type": "extensionHost",
             "request": "launch",
             "runtimeExecutable": "${execPath}",
+            "env": {
+                "EXTENSION_DEBUG": "1"
+            },
             "args": [
                 "--extensionDevelopmentPath=${workspaceFolder}",
                 "--extensionTestsPath=${workspaceFolder}/out/test/unit"
@@ -87,6 +96,9 @@
             "program": "${workspaceFolder}/out/test/integration/runTests.js",
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
+            "env": {
+                "EXTENSION_DEBUG": "1"
+            },
             "presentation": {
                 "group": "2_tests",
                 "order": 1

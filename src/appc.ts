@@ -380,6 +380,13 @@ export class Appc {
 			return JSON.parse(fs.readFileSync(sessionPath, 'utf8'));
 		}
 	}
+
+	public async readConfig (): Promise<{ expiry: number; packageId: string } | undefined> {
+		const configPath = path.join(homedir(), '.appcelerator/appc-cli.json');
+		if (await fs.pathExists(configPath)) {
+			return JSON.parse(await fs.readFile(configPath, 'utf8'));
+		}
+	}
 }
 
 export default new Appc();
