@@ -35,8 +35,9 @@ export async function activate (context: vscode.ExtensionContext): Promise<void>
 	startup();
 }
 
-export function deactivate (): void {
+export async function deactivate (): Promise<void> {
 	project.dispose();
+	return await ExtensionContainer.telemetry.endSession();
 }
 
 /**
@@ -47,6 +48,19 @@ export function deactivate (): void {
  * we're installing from a missing tooling scenario
  */
 export async function startup (): Promise<void> {
+	const telemetryEnabled = ExtensionContainer.context.globalState.get<boolean>(GlobalState.TelemetryEnabled);
+
+	// If we have set the value already, don't re-prompt
+	if (telemetryEnabled === undefined) {
+		const enable = await vscode.window.showInformationMessage('Would you like to help us improve the Titanium Extension by allowing us to collect usage data? View our privacy statement [here](https://www.axway.com/en/privacy-statement)', { title: 'Yes' }, { title: 'No' });
+
+		if (enable?.title.toLowerCase() === 'yes') {
+			ExtensionContainer.context.globalState.update(GlobalState.TelemetryEnabled, true);
+		} else if (enable?.title.toLowerCase() === 'no') {
+			ExtensionContainer.context.globalState.update(GlobalState.TelemetryEnabled, false);
+		}
+	}
+
 	const { missing } = await environment.validateEnvironment();
 
 	if (missing.length) {
@@ -70,6 +84,8 @@ export async function startup (): Promise<void> {
 	});
 
 	ExtensionContainer.setContext(GlobalState.Enabled, true);
+
+	ExtensionContainer.telemetry.startSession();
 
 	vscode.window.withProgress({ cancellable: false, location: vscode.ProgressLocation.Notification, title: 'Titanium' }, async progress => {
 		if (ExtensionContainer.context.globalState.get(GlobalState.Liveview)) {
