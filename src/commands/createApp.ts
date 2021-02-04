@@ -49,6 +49,9 @@ export async function createApplication (): Promise<void> {
 			const projectDir = Uri.file(path.join(workspaceDir.fsPath, name));
 			await commands.executeCommand(VSCodeCommands.OpenFolder, projectDir, true);
 		}
+
+		ExtensionContainer.sendTelemetry('create.module');
+
 	} catch (error) {
 		if (error instanceof InteractionError) {
 			await handleInteractionError(error);

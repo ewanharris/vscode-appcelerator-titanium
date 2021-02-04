@@ -1,9 +1,11 @@
 import * as vscode from 'vscode';
-import { TaskExecutionContext, Platform, ProjectType } from './tasksHelper';
+import { TaskExecutionContext, Platform, ProjectType, TitaniumTaskTypes } from './tasksHelper';
 import { TaskPseudoTerminal, CommandError } from './taskPseudoTerminal';
 import { TaskHelper, Helpers } from './helpers';
 import { UserCancellation, handleInteractionError, InteractionError, checkLogin } from '../commands/common';
 import { LogLevel } from '../types/common';
+import { AppBuildTaskTitaniumBuildBase } from './buildTaskProvider';
+import { ExtensionContainer } from '../container';
 
 function getPlatform (task: TitaniumTaskBase): Platform {
 	if (task.definition.titaniumBuild.platform === 'android' || task.definition.titaniumBuild.android !== undefined) {
@@ -17,6 +19,17 @@ function getPlatform (task: TitaniumTaskBase): Platform {
 	}
 }
 
+function isAppBuild(titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuildBase): titaniumBuild is AppBuildTaskTitaniumBuildBase {
+	if (titaniumBuild.projectType === 'app') {
+		return true;
+	} else {
+		return false;
+	}
+}
+
+function isDistributionBuild (taskType: TitaniumTaskTypes): boolean {
+	return taskType === 'titanium-package';
+}
 export interface TitaniumTaskBase extends vscode.Task {
 	definition: TitaniumTaskDefinitionBase;
 }
@@ -92,5 +105,29 @@ export abstract class CommandTaskProvider implements vscode.TaskProvider {
 
 	public getHelper (platform: Platform): TaskHelper {
 		return this.helpers[platform];
+	}
+
+	public sendTelemetry (type: TitaniumTaskTypes, titaniumBuild: TitaniumBuildBase | AppBuildTaskTitaniumBuildBase): void {
+		const eventData: Record<string, unknown> = {
+			platform: titaniumBuild.platform,
+			projectType: titaniumBuild.projectType
+		};
+
+		if (isAppBuild(titaniumBuild)) {
+			eventData.target = titaniumBuild.target;
+			if (!isDistributionBuild(type)) {
+				eventData.debug = !!titaniumBuild.debug;
+			}
+		}
+
+		try {
+			if (isDistributionBuild(type)) {
+				ExtensionContainer.sendTelemetry('distribute', eventData);
+			} else {
+				ExtensionContainer.sendTelemetry('run', eventData);
+			}
+		} catch (error) {
+			// ignore
+		}
 	}
 }

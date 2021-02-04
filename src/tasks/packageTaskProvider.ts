@@ -63,6 +63,8 @@ export class PackageTaskProvider extends CommandTaskProvider {
 	protected async executeTaskInternal (context: TaskExecutionContext, task: PackageTask): Promise<void> {
 		const buildInfo = await this.resolveTaskInformation(context, task);
 
+		this.sendTelemetry(task.definition.type, task.definition.titaniumBuild);
+
 		await context.terminal.executeCommand(buildInfo, context.folder, context.cancellationToken);
 	}
 }

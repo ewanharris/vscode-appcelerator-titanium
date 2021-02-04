@@ -40,6 +40,11 @@ export async function installUpdates (updateInfo?: UpdateInfo[], promptForChoice
 					message: `Installed ${label} (${counter}/${selectedUpdates})`,
 					increment: 100 / selectedUpdates
 				});
+				ExtensionContainer.sendTelemetry('product.install', {
+					product: update.productName,
+					previous: update.currentVersion,
+					new: update.latestVersion
+				});
 			} catch (error) {
 				progress.report({
 					message: `Failed to install ${label} (${counter}/${selectedUpdates})`,
