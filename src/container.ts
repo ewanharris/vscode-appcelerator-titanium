@@ -12,6 +12,7 @@ import { getNodeSupportedVersion } from './utils';
 
 import * as path from 'path';
 import { homedir } from 'os';
+import { ClassifiedEvent, PropertyData, GDPRProperty, StrictPropertyCheck, BaseEventMetrics } from './types/telemetry';
 export class ExtensionContainer {
 	private static _appc: Appc;
 	private static _buildExplorer: DeviceExplorer;
@@ -134,19 +135,35 @@ export class ExtensionContainer {
 		return this._updateInfo;
 	}
 
-	static async sendTelemetry (event: string, data: Record<string, unknown> = {}): Promise<void> {
-		const baseData = {
+	/**
+	 * Adds the packageId from the appc-cli.json to the event data file and sends the event
+	 *
+	 * @param {String} event - event name.
+	 * @param {Object} data - data to set in the body of the event.
+	 */
+	static async publicLog2<
+		E extends ClassifiedEvent<T> = never,
+		T extends { [_ in keyof T]: PropertyData | GDPRProperty | undefined } = never>
+	(
+		event: string,
+		data?: StrictPropertyCheck<
+		E,
+		ClassifiedEvent<T>,
+		E
+		>): Promise<void> {
+		const baseData: Partial<BaseEventMetrics> = {
 			vsCodeVersion: vscode.version
 		};
 
 		try {
 			const config = await this._appc.readConfig();
 			if (config?.packageId) {
-				data.packageId = config.packageId;
+				baseData.packageId = config.packageId;
 			}
 			await this._telemetry.sendEvent(event, { ...baseData, ...data });
 		} catch (error) {
 			// ignore
+			console.error(error);
 		}
 
 	}

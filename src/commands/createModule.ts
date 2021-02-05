@@ -8,6 +8,7 @@ import { ExtensionContainer } from '../container';
 import { inputBox, selectCodeBases, selectCreationLocation, selectPlatforms, yesNoQuestion } from '../quickpicks';
 import { createModuleArguments, validateAppId } from '../utils';
 import { checkLogin, handleInteractionError, InteractionError } from './common';
+import { CreationEventClassification, CreationEventMetrics } from '../types/telemetry';
 
 export async function createModule (): Promise<void> {
 	try {
@@ -56,7 +57,7 @@ export async function createModule (): Promise<void> {
 			await commands.executeCommand(VSCodeCommands.OpenFolder, projectDir, true);
 		}
 
-		ExtensionContainer.sendTelemetry('create.app');
+		ExtensionContainer.publicLog2<CreationEventMetrics, CreationEventClassification>('create.module', { platforms });
 
 	} catch (error) {
 		if (error instanceof InteractionError) {

@@ -965,11 +965,12 @@
     "nyc": "^15.1.0",
     "sinon": "^9.2.4",
     "standard-version": "^9.1.0",
-    "typescript": "^4.1.5",
     "tmp": "^0.2.1",
+    "typescript": "^4.1.5",
     "vscode-extension-tester": "^3.2.6",
     "vscode-extension-tester-native": "^3.0.2",
-    "vscode-test": "^1.5.1"
+    "vscode-test": "^1.5.1",
+    "vscode-telemetry-extractor": "^1.6.0"
   },
   "dependencies": {
     "@awam/remotedebug-ios-webkit-adapter": "^0.4.2",

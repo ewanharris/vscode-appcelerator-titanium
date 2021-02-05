@@ -1,5 +1,6 @@
 import * as fs from 'fs-extra';
 import * as path from 'path';
+import { AppCreationEventClassification, AppCreationEventMetrics } from '../types/telemetry';
 
 import { commands, ProgressLocation, Uri, window } from 'vscode';
 import { VSCodeCommands, WorkspaceState } from '../constants';
@@ -50,7 +51,7 @@ export async function createApplication (): Promise<void> {
 			await commands.executeCommand(VSCodeCommands.OpenFolder, projectDir, true);
 		}
 
-		ExtensionContainer.sendTelemetry('create.module');
+		ExtensionContainer.publicLog2<AppCreationEventMetrics, AppCreationEventClassification>('create.module', { enableServices, platforms });
 
 	} catch (error) {
 		if (error instanceof InteractionError) {

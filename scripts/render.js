@@ -2,6 +2,8 @@ const ejs = require('ejs');
 const fs = require('fs-extra');
 const packageJson = require('../package.json');
 const path = require('path');
+const { convertConfigToSourceSpecs, extractAndResolveDeclarations } = require('vscode-telemetry-extractor');
+const { notDeepStrictEqual } = require('assert');
 
 const renderObject = {
 	commands: generateCommands(),
@@ -11,18 +13,33 @@ const renderObject = {
 	taskProperties: generateTaskProperties()
 };
 
-const readmeTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'README.md.ejs'), 'utf8');
+generateTelemetryData()
+	.then(async telemetryData => {
+		renderObject.telemetryData = telemetryData;
 
-const contents = ejs.render(readmeTemplate, renderObject);
-fs.writeFileSync(path.join(__dirname, '..', 'README.md'), contents);
+		const readmeTemplate = await fs.readFile(path.join(__dirname, 'templates', 'README.md.ejs'), 'utf8');
+		const contents = ejs.render(readmeTemplate, renderObject);
+		await fs.writeFile(path.join(__dirname, '..', 'README.md'), contents);
 
-const debuggingTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'debugging.md.ejs'), 'utf8');
-const debugContents = ejs.render(debuggingTemplate, renderObject);
-fs.writeFileSync(path.join(__dirname, '..', 'doc', 'debugging.md'), debugContents);
+		const debuggingTemplate = await fs.readFile(path.join(__dirname, 'templates', 'debugging.md.ejs'), 'utf8');
+		const debugContents = ejs.render(debuggingTemplate, renderObject);
+		await fs.writeFile(path.join(__dirname, '..', 'doc', 'debugging.md'), debugContents);
 
-const taskTemplate = fs.readFileSync(path.join(__dirname, 'templates', 'tasks.md.ejs'), 'utf8');
-const taskContents = ejs.render(taskTemplate, renderObject);
-fs.writeFileSync(path.join(__dirname, '..', 'doc', 'tasks.md'), taskContents);
+		const taskTemplate = await fs.readFile(path.join(__dirname, 'templates', 'tasks.md.ejs'), 'utf8');
+		const taskContents = ejs.render(taskTemplate, renderObject);
+		await fs.writeFile(path.join(__dirname, '..', 'doc', 'tasks.md'), taskContents);
+
+		const telemetryTemplate = await fs.readFile(path.join(__dirname, 'templates', 'telemetry.md.ejs'), 'utf8');
+		const telemetryContents = ejs.render(telemetryTemplate, renderObject);
+		await fs.writeFile(path.join(__dirname, '..', 'doc', 'telemetry.md'), telemetryContents);
+
+		return;
+	})
+	.catch(error => {
+		console.error('Failed to generate docs');
+		console.error(error);
+		process.exit(1);
+	});
 
 function generateCommands() {
 	const { contributes: { commands, keybindings, menus } } = packageJson;
@@ -195,4 +212,79 @@ function recurseProperties(properties, platform, taskType, propertyPrefix = 'tit
 		return `There are no ${platform} specific configuration properties for the ${taskType} task.`;
 	}
 	return propertyData;
+}
+
+async function generateTelemetryData () {
+	const data = {
+		common: {
+			event: {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			},
+			'distribution.version': {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			},
+			'hardware.arch': {
+				classification: 'EndUserPseudonymizedInformation',
+				purpose: 'FeatureInsight'
+			},
+			'hardware.id': {
+				classification: 'EndUserPseudonymizedInformation',
+				purpose: 'FeatureInsight'
+			},
+			'os.name': {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			},
+			'os.version': {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			},
+			data: {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			},
+			packageid: {
+				classification: 'EndUserPseudonymizedInformation',
+				purpose: 'FeatureInsight'
+			},
+			vscodeversion: {
+				classification: 'SystemMetaData',
+				purpose: 'FeatureInsight'
+			}
+		},
+		eventNames: [ ],
+		eventsWithExtraData: { }
+	};
+
+	const sourceSpec = {
+		sourceDirs: [ path.join(__dirname, '..', 'src') ],
+		excludedDirs: [],
+		parserOptions: {
+			eventPrefix: '',
+			lowercaseEvents: false,
+			silenceOutput: true
+		}
+	};
+	const declarations = await extractAndResolveDeclarations([ sourceSpec ]);
+	const commonData = Object.keys(data.common).sort();
+	for (const [ event, eventData ] of Object.entries(declarations.events)) {
+		data.eventNames.push(event);
+		const sortedEventData = Object.keys(eventData).sort();
+		try {
+			notDeepStrictEqual(sortedEventData, commonData);
+			data.eventsWithExtraData[event] = Object.keys(eventData)
+				.filter(dataName => !commonData.includes(dataName))
+				.map(dataName => ({ ...eventData[dataName], name: dataName }));
+		} catch (e) {
+			if (e.code === 'ERR_ASSERTION') {
+				// They are equal so just ignore
+				continue;
+			}
+			console.log(e);
+		}
+
+	}
+	return data;
 }

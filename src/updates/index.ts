@@ -6,6 +6,7 @@ import { ExtensionContainer } from '../container';
 import { Commands } from '../commands';
 import { GlobalState } from '../constants';
 import { startup } from '../extension';
+import { ProductInstallEventClassification, ProductInstallEventMetrics } from '..//types/telemetry';
 
 export async function installUpdates (updateInfo?: UpdateInfo[], promptForChoice?: boolean): Promise<void> {
 	vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Titanium Updates', cancellable: false }, async progress => {
@@ -40,7 +41,7 @@ export async function installUpdates (updateInfo?: UpdateInfo[], promptForChoice
 					message: `Installed ${label} (${counter}/${selectedUpdates})`,
 					increment: 100 / selectedUpdates
 				});
-				ExtensionContainer.sendTelemetry('product.install', {
+				ExtensionContainer.publicLog2<ProductInstallEventMetrics, ProductInstallEventClassification>('product.install', {
 					product: update.productName,
 					previous: update.currentVersion,
 					new: update.latestVersion

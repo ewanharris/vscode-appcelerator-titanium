@@ -1,0 +1,48 @@
+# Telemetry data
+
+This extension sends telemetry data to the AMPLIFY Platform to help us understand how the extension is used and how we can improve it. We send telemetry events for the following instances:
+
+* When certain actions are performed
+* When the extension is activated and deactivated
+
+## Telemetry Data
+
+### Telemetry Events
+
+The following are the events sent by the extension:
+
+<% telemetryData.eventNames.forEach((name) => {  -%>
+<%- `* ${name}` %>
+<% }); -%>
+
+### Common Data
+
+The following data is sent in every telemetry event:
+
+| Name | Classification | Purpose |
+| -----|  -------------- |-------- |
+<% Object.entries(telemetryData.common).forEach(([ name, property ]) => {  -%>
+<%- `| ${name} | ${property.classification} | ${property.purpose} |` %>
+<% }); -%>
+
+### Event Specific Data
+
+The following events send additional data:
+<% Object.entries(telemetryData.eventsWithExtraData).forEach(([ name, data ]) => {  -%>
+
+<%- `#### ${name}` %>
+
+| Name | Classification | Purpose |
+| -----| -------------- |-------- |
+<% data.forEach((property) => {  -%>
+<%- `| ${property.name} | ${property.classification} | ${property.purpose} |` %>
+<% }); -%>
+<% }); -%>
+
+When we send telemetry data we send the following data in every event:
+
+* The OS name and version
+* An anonymous hardware ID
+* The extensions version
+
+We might also include extra information in

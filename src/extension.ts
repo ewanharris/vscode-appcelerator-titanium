@@ -37,7 +37,7 @@ export async function activate (context: vscode.ExtensionContext): Promise<void>
 
 export async function deactivate (): Promise<void> {
 	project.dispose();
-	return await ExtensionContainer.telemetry.endSession();
+	return ExtensionContainer.telemetry.endSession();
 }
 
 /**
