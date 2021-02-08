@@ -28,4 +28,7 @@ export interface Config {
 	project: {
 		defaultI18nLanguage: string;
 	};
+	telemetry: {
+		enabled: boolean;
+	}
 }

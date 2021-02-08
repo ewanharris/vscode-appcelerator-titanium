@@ -28,7 +28,7 @@ export class ExtensionContainer {
 		this._appc = appc;
 		this._config = config;
 		this._context = context;
-		const enableTelemetry = this._context.globalState.get<boolean>(GlobalState.TelemetryEnabled) === true;
+		const enableTelemetry = ExtensionContainer.config.telemetry.enabled === true;
 
 		this._telemetry = new Telemetry({
 			enabled: enableTelemetry,
@@ -61,8 +61,22 @@ export class ExtensionContainer {
 		return this._terminal;
 	}
 
-	public static resetConfig (): void {
-		this._config = undefined;
+	public static resetConfig (configEvent: vscode.ConfigurationChangeEvent): void {
+		this._config = configuration.get<Config>();
+
+		// Check whether telemetry enablement was changed, then update the telemetry enablement
+		// and start or end a session as required
+		if (configEvent.affectsConfiguration('titanium.telemetry')) {
+			const userEnabledTelemetry = this._config.telemetry.enabled === true;
+
+			if (this._telemetry.hasActiveSession && !userEnabledTelemetry) {
+				this._telemetry.endSession();
+				this._telemetry.enabled = userEnabledTelemetry;
+			} else if (!this._telemetry.hasActiveSession && userEnabledTelemetry) {
+				this._telemetry.enabled = userEnabledTelemetry;
+				this._telemetry.startSession();
+			}
+		}
 	}
 
 	static set runningTask (task: vscode.TaskExecution|undefined) {

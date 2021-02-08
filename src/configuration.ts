@@ -26,7 +26,7 @@ export class Configuration {
 	}
 
 	private onConfigurationChanged (e: ConfigurationChangeEvent): void {
-		ExtensionContainer.resetConfig();
+		ExtensionContainer.resetConfig(e);
 	}
 }
 

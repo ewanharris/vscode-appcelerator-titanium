@@ -449,6 +449,11 @@
           "type": "string",
           "default": "en",
           "description": "Default language to use for i18n autocomplete."
+        },
+        "titanium.telemetry.enabled": {
+          "type": "boolean",
+          "default": null,
+          "description": "Whether to enable telemetry for the extension"
         }
       }
     },
