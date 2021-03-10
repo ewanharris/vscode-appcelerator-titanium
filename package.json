@@ -440,6 +440,11 @@
           "default": true,
           "description": "When true build/package commands will be run using the integrated terminal as opposed to using an output channel."
         },
+        "titanium.general.useTi": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to use the OSS based tooling (alloy + ti) instead of the Appcelerator platform based tool (appc)"
+        },
         "titanium.package.distributionOutputDirectory": {
           "type": "string",
           "default": "dist",

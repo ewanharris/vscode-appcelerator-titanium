@@ -117,4 +117,8 @@ export class ExtensionContainer {
 
 		return this._updateInfo;
 	}
+
+	static isUsingTi (): boolean {
+		return this.config.general.useTi;
+	}
 }
