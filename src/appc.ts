@@ -48,7 +48,15 @@ export class Appc {
 			ExtensionContainer.context.globalState.update(GlobalState.RefreshEnvironment, true);
 			let result = '';
 			let output = '';
-			const proc = spawn('appc', [ 'ti', 'info', '-o', 'json', '--no-prompt' ], { shell: true });
+
+			const command = ExtensionContainer.isUsingTi() ? 'ti' : 'appc';
+			const args = [ 'info', '-o', 'json' ];
+			if (!ExtensionContainer.isUsingTi()) {
+				args.unshift('ti');
+				args.push('--no-prompt');
+			}
+
+			const proc = spawn(command, args, { shell: true });
 			proc.stdout.on('data', data => {
 				result += data;
 				output += data;
