@@ -6,7 +6,7 @@ import appc from './appc';
 
 import { platform } from 'os';
 import { workspace, tasks, Task, ShellExecution } from 'vscode';
-import { CleanAppOptions, CreateAppOptions, CreateModuleOptions, Target } from './types/cli';
+import { CreateAppOptions, CreateModuleOptions, Target } from './types/cli';
 import { IosCert, IosCertificateType, PlatformPretty } from './types/common';
 import { ExtensionContainer } from './container';
 
@@ -269,7 +269,7 @@ export function filterJSFiles (directory: string): readonly walkSync.Item[] {
 	});
 }
 
-function normalizeDriveLetter (filePath: string): string {
+export function normalizeDriveLetter (filePath: string): string {
 	if (process.platform !== 'win32') {
 		return filePath;
 	}
@@ -277,7 +277,7 @@ function normalizeDriveLetter (filePath: string): string {
 	return `${root.substr(0, 1).toUpperCase()}${filePath.slice(1)}`;
 }
 
-function quoteArgument (arg: string): string {
+export function quoteArgument (arg: string): string {
 	return `"${arg}"`;
 }
 
@@ -341,17 +341,6 @@ export function createModuleArguments (options: CreateModuleOptions): string[] {
 	if (options.force) {
 		args.push('--force');
 	}
-	return args.map(arg => quoteArgument(arg));
-}
-
-export function cleanAppArguments (options: CleanAppOptions): string[] {
-	const args = [
-		'ti',
-		'clean',
-		'--project-dir', normalizeDriveLetter(options.projectDir),
-		'--log-level', options.logLevel
-	];
-
 	return args.map(arg => quoteArgument(arg));
 }
 

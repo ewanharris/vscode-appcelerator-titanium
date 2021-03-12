@@ -1,5 +1,5 @@
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
-import { ProgressLocation, ProgressOptions, Terminal as VSTerminal, window, OutputChannel, commands } from 'vscode';
+import { Terminal as VSTerminal, window, OutputChannel, commands } from 'vscode';
 import { GlobalState } from './constants';
 import { CommandError, CommandResponse } from './common/utils';
 import { ExtensionContainer } from './container';
@@ -58,17 +58,6 @@ export default class Terminal {
 		this.clear();
 		this.terminal.sendText(command);
 
-	}
-
-	public runWithProgress (
-		command: string,
-		args: string[],
-		progressOptions: ProgressOptions = { location: ProgressLocation.Window },
-		spawnOptions: SpawnOptions = { shell: true }
-	): Thenable<CommandResponse> {
-		return window.withProgress(progressOptions, () => {
-			return this.runInBackground(command, args, spawnOptions);
-		});
 	}
 
 	public runInBackground (command: string, args: string[], spawnOptions: SpawnOptions = { shell: true }): Promise<CommandResponse> {
