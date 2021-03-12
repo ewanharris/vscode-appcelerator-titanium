@@ -47,7 +47,8 @@ export function deactivate (): void {
  * we're installing from a missing tooling scenario
  */
 export async function startup (): Promise<void> {
-	const { missing } = await environment.validateEnvironment();
+
+	const { missing } = await environment.validateEnvironment(undefined, !ExtensionContainer.isUsingTi());
 
 	if (missing.length) {
 		ExtensionContainer.setContext(GlobalState.MissingTooling, true);

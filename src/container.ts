@@ -109,7 +109,7 @@ export class ExtensionContainer {
 			// ignore
 		}
 
-		this._updateInfo = await updates.checkAllUpdates({ nodeJS: supportedVersions });
+		this._updateInfo = await updates.checkAllUpdates({ nodeJS: supportedVersions }, !ExtensionContainer.isUsingTi());
 
 		if (this._updateInfo?.length) {
 			this.setContext(GlobalState.HasUpdates, true);
