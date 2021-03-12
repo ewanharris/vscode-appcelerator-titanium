@@ -1,12 +1,8 @@
 import { ChildProcess, spawn, SpawnOptions } from 'child_process';
 import { ProgressLocation, ProgressOptions, Terminal as VSTerminal, window, OutputChannel, commands } from 'vscode';
 import { GlobalState } from './constants';
-import { CommandError } from './common/utils';
+import { CommandError, CommandResponse } from './common/utils';
 import { ExtensionContainer } from './container';
-
-interface CommandResponse {
-	output: string;
-}
 
 export default class Terminal {
 

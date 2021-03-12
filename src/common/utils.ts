@@ -64,3 +64,7 @@ export class CommandError extends Error {
 		this.signal = signal;
 	}
 }
+
+export interface CommandResponse {
+	output: string;
+}
