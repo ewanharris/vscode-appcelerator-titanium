@@ -6,7 +6,7 @@
         {
             "type": "npm",
             "script": "watch",
-            "problemMatcher": "$tsc-watch",
+			"problemMatcher": ["$ts-checker-webpack-watch", "$ts-checker-eslint-webpack-watch"],
             "isBackground": true,
             "presentation": {
                 "reveal": "never"

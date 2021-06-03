@@ -10,3 +10,6 @@ coverage/
 .nyc_output/
 test-resources/
 junit_report-ui.xml
+dist/
+lookup/
+.eslintcache
