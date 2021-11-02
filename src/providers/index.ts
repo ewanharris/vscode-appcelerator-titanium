@@ -20,6 +20,8 @@ import { ViewHoverProvider } from './hover/viewHoverProvider';
 import { ExtensionContainer } from '../container';
 import { TiTerminalLinkProvider } from './terminalLinkProvider';
 
+import { LanguageClient, LanguageClientOptions, ServerOptions, TransportKind } from 'vscode-languageclient/node';
+
 const viewFilePattern = '**/app/{views,widgets}/**/*.xml';
 const styleFilePattern = '**/*.tss';
 const controllerFilePattern = '{**/app/controllers/**/*.js,**/app/lib/**/*.js,**/app/widgets/**/*.js,**/app/alloy.js}';
@@ -30,7 +32,7 @@ export function registerProviders(context: vscode.ExtensionContext): void {
 	context.subscriptions.push(
 		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCompletionItemProvider(), '.', '\'', '"', '/'),
 		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleCompletionItemProvider(), '.', '\'', '"'),
-		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerCompletionItemProvider(), '.', '\'', '"', '/'),
+		// vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerCompletionItemProvider(), '.', '\'', '"', '/'),
 		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: '**/tiapp.xml' }, new TiappCompletionItemProvider(), '.')
 	);
 
@@ -89,6 +91,34 @@ export function registerProviders(context: vscode.ExtensionContext): void {
 			vscode.workspace.applyEdit(edit);
 		}
 	});
+
+	const languageServer = require.resolve('titanium-language-server');
+	const debugOptions = { execArgv: [ '--nolazy', '--inspect=6009' ] };
+
+	const serverOptions: ServerOptions = {
+		run: { module: languageServer, transport: TransportKind.ipc },
+		debug: {
+			module: languageServer,
+			transport: TransportKind.ipc,
+			options: debugOptions
+		}
+	};
+
+	const clientOptions: LanguageClientOptions = {
+		documentSelector: [ { scheme: 'file', language: 'javascript' } ],
+		synchronize: {
+			fileEvents: vscode.workspace.createFileSystemWatcher('**/.tiapp.xml')
+		}
+	};
+
+	const client = new LanguageClient(
+		'titaniumLanguageClient',
+		'Titanium Language Client',
+		serverOptions,
+		clientOptions
+	);
+
+	client.start();
 }
 
 /**

@@ -1071,6 +1071,7 @@
     "uuid": "^9.0.0",
     "vscode-chrome-debug-core": "^6.8.11",
     "vscode-debugadapter": "^1.51.0",
+    "vscode-languageclient": "^7.0.0",
     "vscode-wizard": "^0.2.20",
     "which": "^3.0.0",
     "xml2js": "^0.5.0"
