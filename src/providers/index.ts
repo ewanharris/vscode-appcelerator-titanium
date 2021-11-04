@@ -31,7 +31,7 @@ export function registerProviders(context: vscode.ExtensionContext): void {
 	// register completion providers
 	context.subscriptions.push(
 		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCompletionItemProvider(), '.', '\'', '"', '/'),
-		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleCompletionItemProvider(), '.', '\'', '"'),
+		// vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleCompletionItemProvider(), '.', '\'', '"'),
 		// vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerCompletionItemProvider(), '.', '\'', '"', '/'),
 		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: '**/tiapp.xml' }, new TiappCompletionItemProvider(), '.')
 	);
@@ -105,7 +105,10 @@ export function registerProviders(context: vscode.ExtensionContext): void {
 	};
 
 	const clientOptions: LanguageClientOptions = {
-		documentSelector: [ { scheme: 'file', language: 'javascript' } ],
+		documentSelector: [
+			{ scheme: 'file', language: 'javascript' },
+			{ scheme: 'file', language: 'alloy-tss' }
+		],
 		synchronize: {
 			fileEvents: vscode.workspace.createFileSystemWatcher('**/.tiapp.xml')
 		}
