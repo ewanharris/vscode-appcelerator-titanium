@@ -107,7 +107,8 @@ export function registerProviders(context: vscode.ExtensionContext): void {
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{ scheme: 'file', language: 'javascript' },
-			{ scheme: 'file', language: 'alloy-tss' }
+			{ scheme: 'file', language: 'alloy-tss' },
+			{ scheme: 'file', language: 'xml' }
 		],
 		synchronize: {
 			fileEvents: vscode.workspace.createFileSystemWatcher('**/.tiapp.xml')
