@@ -25,32 +25,51 @@ export async function activate (context: vscode.ExtensionContext): Promise<void>
 	ExtensionContainer.inititalize(context, config);
 
 	registerCommands();
-	registerProviders(context);
+	await registerProviders(context);
 	registerViews(context);
 	registerTaskProviders(context);
 	registerDebugProvider(context);
 
 	startup();
 
-	vscode.workspace.onDidSaveTextDocument(async (event) => {
-		if (!event.fileName.includes('tiapp.xml')) {
-			return;
-		}
+	context.subscriptions.push(
+		vscode.workspace.onDidSaveTextDocument(async (event) => {
+			if (!event.fileName.includes('tiapp.xml')) {
+				return;
+			}
 
-		const parent = dirname(event.fileName);
-		const project = ExtensionContainer.projects.get(parent);
+			const parent = dirname(event.fileName);
+			const project = ExtensionContainer.projects.get(parent);
 
-		if (!project) {
-			return;
-		}
+			if (!project) {
+				return;
+			}
 
-		await project.load();
-		await generateCompletions(false, project);
-	});
+			await project.load();
+			await generateCompletions(false, project);
+		}),
+		vscode.workspace.onDidGrantWorkspaceTrust(async () => {
+			await startup();
+		})
+	);
 
-	vscode.workspace.onDidGrantWorkspaceTrust(async () => {
-		await startup();
-	});
+	// Temporary command to reload the extension when switching between LSP and VS Code providers
+	// this should be removed when switching over to LSP
+	context.subscriptions.push(
+		vscode.commands.registerCommand('titanium.reloadExtension', async () => {
+			const toDispose = context.subscriptions.slice();
+			context.subscriptions.length = 0;
+			for (const disposable of toDispose) {
+				try {
+					disposable.dispose();
+				} catch (error) {
+					// ignore
+					console.log(error);
+				}
+			}
+			await activate(context);
+		})
+	);
 }
 
 /**

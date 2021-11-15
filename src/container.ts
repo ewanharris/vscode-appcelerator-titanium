@@ -59,8 +59,12 @@ export class ExtensionContainer {
 		return this._terminal;
 	}
 
-	public static resetConfig (_configEvent: vscode.ConfigurationChangeEvent): void {
+	public static resetConfig (configEvent: vscode.ConfigurationChangeEvent): void {
 		this._config = configuration.get<Config>();
+
+		if (configEvent.affectsConfiguration('titanium.general.useLanguageServer')) {
+			vscode.commands.executeCommand('titanium.reloadExtension');
+		}
 	}
 
 	static set runningTask (task: vscode.TaskExecution|undefined) {

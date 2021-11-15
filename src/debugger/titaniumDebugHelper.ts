@@ -89,10 +89,8 @@ async function handleCustomEvent(event: vscode.DebugSessionCustomEvent): Promise
 export function registerDebugProvider (ctx: vscode.ExtensionContext): void {
 
 	ctx.subscriptions.push(
-		vscode.debug.registerDebugConfigurationProvider('titanium', new TitaniumDebugConfigurationProvider())
+		vscode.debug.registerDebugConfigurationProvider('titanium', new TitaniumDebugConfigurationProvider()),
+		vscode.debug.onDidReceiveDebugSessionCustomEvent(handleCustomEvent)
 	);
-
-	vscode.debug.onDidReceiveDebugSessionCustomEvent(handleCustomEvent);
-
 }
 

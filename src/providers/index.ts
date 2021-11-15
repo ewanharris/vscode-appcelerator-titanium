@@ -4,7 +4,13 @@ import * as vscode from 'vscode';
 
 import { Commands, handleInteractionError, InteractionChoice, InteractionError, registerCommand } from '../commands';
 import { Project } from '../project';
+<<<<<<< HEAD
 import { completion, updates, Errors } from 'titanium-editor-commons';
+=======
+import { completion, updates  } from 'titanium-editor-commons';
+import { CustomError } from 'titanium-editor-commons/completions/util';
+import { CustomRequests, serverPath } from 'titanium-language-server';
+>>>>>>> 09528ec (feat: handle switching between language server and built in providers)
 
 // Import the various providers
 import { CompletionsFormat } from './completion/baseCompletionItemProvider';
@@ -26,103 +32,114 @@ const viewFilePattern = '**/app/{views,widgets}/**/*.xml';
 const styleFilePattern = '**/*.tss';
 const controllerFilePattern = '{**/app/controllers/**/*.js,**/app/lib/**/*.js,**/app/widgets/**/*.js,**/app/alloy.js}';
 
-export function registerProviders(context: vscode.ExtensionContext): void {
+export async function registerProviders(context: vscode.ExtensionContext): Promise<void> {
 
-	// register completion providers
-	context.subscriptions.push(
-		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCompletionItemProvider(), '.', '\'', '"', '/'),
-		// vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleCompletionItemProvider(), '.', '\'', '"'),
-		// vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerCompletionItemProvider(), '.', '\'', '"', '/'),
-		vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: '**/tiapp.xml' }, new TiappCompletionItemProvider(), '.')
-	);
+	// TODO: this is too much
+	vscode.languages.setLanguageConfiguration('xml', {
+		// eslint-disable-next-line no-useless-escape
+		wordPattern: /(-?\d*\.\d\w*)|([^\`\~\!\@\#\%\^\&\*\(\)\-\=\+\[\{\]\}\\\|\;\:\'\"\,\.\<\>\/\?\s]+)/g,
+	});
 
-	// register hover providers
-	context.subscriptions.push(
-		vscode.languages.registerHoverProvider({ scheme: 'file', pattern: '**/{*.xml,*.tss,*.js}' }, new ViewHoverProvider()),
-	);
+	if (ExtensionContainer.config.general.useLanguageServer) {
+		const debugOptions = { execArgv: [ '--nolazy', '--inspect=6009' ] };
+		const serverOptions: ServerOptions = {
+			run: { module: serverPath, transport: TransportKind.ipc },
+			debug: {
+				module: serverPath,
+				transport: TransportKind.ipc,
+				options: debugOptions
+			}
+		};
 
-	// register definition providers
-	context.subscriptions.push(
-		vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewDefinitionProvider()),
-		vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleDefinitionProvider()),
-		vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerDefinitionProvider())
-	);
+		const clientOptions: LanguageClientOptions = {
+			documentSelector: [
+				{ scheme: 'file', language: 'javascript' },
+				{ scheme: 'file', language: 'alloy-tss' },
+				{ scheme: 'file', language: 'xml' }
+			],
+			synchronize: {
+				fileEvents: vscode.workspace.createFileSystemWatcher('**/.tiapp.xml')
+			}
+		};
 
-	// register code action providers
-	context.subscriptions.push(
-		vscode.languages.registerCodeActionsProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCodeActionProvider())
-	);
+		const client = new LanguageClient(
+			'titaniumLanguageClient',
+			'Titanium Language Client',
+			serverOptions,
+			clientOptions
+		);
 
+		context.subscriptions.push(client.start());
+
+		await client.onReady();
+
+		client.onRequest(CustomRequests.InstalledSdks, () => {
+			return appc.sdks();
+		});
+	} else {
+		// register completion providers
+		context.subscriptions.push(
+			vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCompletionItemProvider(), '.', '\'', '"', '/'),
+			vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleCompletionItemProvider(), '.', '\'', '"'),
+			vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerCompletionItemProvider(), '.', '\'', '"', '/'),
+			vscode.languages.registerCompletionItemProvider({ scheme: 'file', pattern: '**/tiapp.xml' }, new TiappCompletionItemProvider(), '.')
+		);
+
+		// register hover providers
+		context.subscriptions.push(
+			vscode.languages.registerHoverProvider({ scheme: 'file', pattern: '**/{*.xml,*.tss,*.js}' }, new ViewHoverProvider()),
+		);
+
+		// register definition providers
+		context.subscriptions.push(
+			vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewDefinitionProvider()),
+			vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: styleFilePattern }, new StyleDefinitionProvider()),
+			vscode.languages.registerDefinitionProvider({ scheme: 'file', pattern: controllerFilePattern }, new ControllerDefinitionProvider())
+		);
+
+		// register code action providers
+		context.subscriptions.push(
+			vscode.languages.registerCodeActionsProvider({ scheme: 'file', pattern: viewFilePattern }, new ViewCodeActionProvider())
+		);
+
+		// register code action commands
+		registerCommand(Commands.InsertCommandId, async (text: string, filePath: string) => {
+			const document = await vscode.workspace.openTextDocument(filePath);
+			const position = new vscode.Position(document.lineCount, 0);
+			if (document.lineAt(position.line - 1).text.trim().length) {
+				text = `\n${text}`;
+			}
+			const edit = new vscode.WorkspaceEdit();
+			edit.insert(vscode.Uri.file(filePath), position, text);
+			vscode.workspace.applyEdit(edit);
+		});
+
+		registerCommand(Commands.InsertI18nStringCommandId, async (text: string, project: Project) => {
+			const defaultLang = ExtensionContainer.config.project.defaultI18nLanguage;
+			const i18nPath = await project.getI18NPath();
+			if (!i18nPath) {
+				return;
+			}
+			const i18nStringPath = path.join(i18nPath, defaultLang, 'strings.xml');
+			if (!await fs.pathExists(i18nStringPath)) {
+				fs.ensureDirSync(path.join(i18nPath, defaultLang));
+				fs.writeFileSync(i18nStringPath, '<?xml version="1.0" encoding="UTF-8"?>\n<resources>\n</resources>');
+			}
+			const document = await vscode.workspace.openTextDocument(i18nStringPath);
+			const insertText = `\t<string name="${text}"></string>\n`;
+			const index = document.getText().indexOf('<\/resources>'); // eslint-disable-line no-useless-escape
+			if (index !== -1) {
+				const position = document.positionAt(index);
+				const edit = new vscode.WorkspaceEdit();
+				edit.insert(vscode.Uri.file(i18nStringPath), position, insertText);
+				vscode.workspace.applyEdit(edit);
+			}
+		});
+	}
 	// register our TerminalLink provider
 	context.subscriptions.push(
 		vscode.window.registerTerminalLinkProvider(new TiTerminalLinkProvider())
 	);
-
-	// register code action commands
-	registerCommand(Commands.InsertCommandId, async (text: string, filePath: string) => {
-		const document = await vscode.workspace.openTextDocument(filePath);
-		const position = new vscode.Position(document.lineCount, 0);
-		if (document.lineAt(position.line - 1).text.trim().length) {
-			text = `\n${text}`;
-		}
-		const edit = new vscode.WorkspaceEdit();
-		edit.insert(vscode.Uri.file(filePath), position, text);
-		vscode.workspace.applyEdit(edit);
-	});
-
-	registerCommand(Commands.InsertI18nStringCommandId, async (text: string, project: Project) => {
-		const defaultLang = ExtensionContainer.config.project.defaultI18nLanguage;
-		const i18nPath = await project.getI18NPath();
-		if (!i18nPath) {
-			return;
-		}
-		const i18nStringPath = path.join(i18nPath, defaultLang, 'strings.xml');
-		if (!await fs.pathExists(i18nStringPath)) {
-			fs.ensureDirSync(path.join(i18nPath, defaultLang));
-			fs.writeFileSync(i18nStringPath, '<?xml version="1.0" encoding="UTF-8"?>\n<resources>\n</resources>');
-		}
-		const document = await vscode.workspace.openTextDocument(i18nStringPath);
-		const insertText = `\t<string name="${text}"></string>\n`;
-		const index = document.getText().indexOf('<\/resources>'); // eslint-disable-line no-useless-escape
-		if (index !== -1) {
-			const position = document.positionAt(index);
-			const edit = new vscode.WorkspaceEdit();
-			edit.insert(vscode.Uri.file(i18nStringPath), position, insertText);
-			vscode.workspace.applyEdit(edit);
-		}
-	});
-
-	const languageServer = require.resolve('titanium-language-server');
-	const debugOptions = { execArgv: [ '--nolazy', '--inspect=6009' ] };
-
-	const serverOptions: ServerOptions = {
-		run: { module: languageServer, transport: TransportKind.ipc },
-		debug: {
-			module: languageServer,
-			transport: TransportKind.ipc,
-			options: debugOptions
-		}
-	};
-
-	const clientOptions: LanguageClientOptions = {
-		documentSelector: [
-			{ scheme: 'file', language: 'javascript' },
-			{ scheme: 'file', language: 'alloy-tss' },
-			{ scheme: 'file', language: 'xml' }
-		],
-		synchronize: {
-			fileEvents: vscode.workspace.createFileSystemWatcher('**/.tiapp.xml')
-		}
-	};
-
-	const client = new LanguageClient(
-		'titaniumLanguageClient',
-		'Titanium Language Client',
-		serverOptions,
-		clientOptions
-	);
-
-	client.start();
 }
 
 /**

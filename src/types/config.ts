@@ -20,6 +20,7 @@ export interface Config {
 		logLevel: LogLevel;
 		useTerminalForBuild: boolean;
 		updateFrequency: string;
+		useLanguageServer: boolean;
 	};
 	package: {
 		distributionOutputDirectory: string;
