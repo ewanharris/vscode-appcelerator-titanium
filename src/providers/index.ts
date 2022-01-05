@@ -4,13 +4,8 @@ import * as vscode from 'vscode';
 
 import { Commands, handleInteractionError, InteractionChoice, InteractionError, registerCommand } from '../commands';
 import { Project } from '../project';
-<<<<<<< HEAD
 import { completion, updates, Errors } from 'titanium-editor-commons';
-=======
-import { completion, updates  } from 'titanium-editor-commons';
-import { CustomError } from 'titanium-editor-commons/completions/util';
 import { CustomRequests, serverPath } from 'titanium-language-server';
->>>>>>> 09528ec (feat: handle switching between language server and built in providers)
 
 // Import the various providers
 import { CompletionsFormat } from './completion/baseCompletionItemProvider';
@@ -74,7 +69,7 @@ export async function registerProviders(context: vscode.ExtensionContext): Promi
 		await client.onReady();
 
 		client.onRequest(CustomRequests.InstalledSdks, () => {
-			return appc.sdks();
+			return ExtensionContainer.environment.sdks();
 		});
 	} else {
 		// register completion providers

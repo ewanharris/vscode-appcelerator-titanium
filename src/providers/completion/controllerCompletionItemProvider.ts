@@ -191,12 +191,15 @@ export class ControllerCompletionItemProvider extends BaseCompletionItemProvider
 		const completions: CompletionItem[] = [];
 		let apiName: string|undefined;
 		let attribute: string|undefined;
-		if (matches && matches.length === 3) {
-			apiName = matches[1];
-			if (apiName.lastIndexOf('.') === apiName.length - 1) {
-				apiName = apiName.substr(0, apiName.length - 1);
-			}
-			attribute = matches[2];
+		const parts = linePrefix.split('.').filter(part => part.length);
+
+		const last = parts.pop();
+
+		if (last && /^(?:[a-z]\w+)|(?:[A-Z]+_)+/.test(last)) {
+			apiName = parts.join('.');
+			attribute = last;
+		} else {
+			apiName = [...parts, last].join('.');
 		}
 
 		if (attribute && ('iOS'.indexOf(attribute) === 0 || 'iPad'.indexOf(attribute) === 0)) {
