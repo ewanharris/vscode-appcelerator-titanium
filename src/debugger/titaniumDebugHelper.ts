@@ -3,6 +3,7 @@ import { TitaniumDebugConfigurationProvider } from './titaniumDebugConfiguration
 import { MESSAGE_STRING, Request, TitaniumLaunchRequestArgs, FeedbackOptions, Response } from '../common/extensionProtocol';
 import { ExtensionContainer } from '../container';
 import { Commands } from '../commands';
+import { TitaniumNextDebugSession } from './next/titaniumNextDebugSession';
 
 async function handleCustomEvent(event: vscode.DebugSessionCustomEvent): Promise<void> {
 	if (event.event === MESSAGE_STRING) {
@@ -90,6 +91,13 @@ export function registerDebugProvider (ctx: vscode.ExtensionContext): void {
 
 	ctx.subscriptions.push(
 		vscode.debug.registerDebugConfigurationProvider('titanium', new TitaniumDebugConfigurationProvider())
+	);
+
+	ctx.subscriptions.push(
+		vscode.debug.registerDebugAdapterDescriptorFactory('titanium-next', {
+			createDebugAdapterDescriptor: () =>
+				new vscode.DebugAdapterInlineImplementation(new TitaniumNextDebugSession()),
+		})
 	);
 
 	vscode.debug.onDidReceiveDebugSessionCustomEvent(handleCustomEvent);
