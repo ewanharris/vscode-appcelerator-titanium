@@ -160,6 +160,13 @@
             "type": "titanium-next",
             "request": "launch",
             "platform": "ios"
+          },
+          {
+            "name": "Attach to running app",
+            "type": "titanium-next",
+            "request": "attach",
+            "platform": "android",
+            "port": 9000
           }
         ],
         "configurationSnippets": [
@@ -206,6 +213,17 @@
               "platform": "ios",
               "target": "device"
             }
+          },
+          {
+            "label": "Titanium (next): Attach to running app",
+            "description": "Attach to a Titanium app whose debug port is already forwarded to localhost",
+            "body": {
+              "name": "Attach to running app",
+              "type": "titanium-next",
+              "request": "attach",
+              "platform": "android",
+              "port": 9000
+            }
           }
         ],
         "configurationAttributes": {
@@ -230,6 +248,35 @@
               "preLaunchTask": {
                 "type": "string",
                 "description": "%titanium.debug.preLaunchTask%"
+              }
+            }
+          },
+          "attach": {
+            "required": [
+              "platform",
+              "port"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "android"
+                ],
+                "description": "Platform of the target app. iOS attach is not yet supported."
+              },
+              "port": {
+                "type": "number",
+                "description": "Debug port on the host where the V8 inspector is reachable (typically the adb-forwarded port)."
+              },
+              "host": {
+                "type": "string",
+                "default": "localhost",
+                "description": "Host where the V8 inspector is reachable. Defaults to localhost."
+              },
+              "trace": {
+                "type": "boolean",
+                "default": false,
+                "description": "When true, the debug adapter emits per-step diagnostic OutputEvents to the Debug Console. Off by default."
               }
             }
           }
@@ -1119,6 +1166,7 @@
     "@types/uuid": "^9.0.8",
     "@types/vscode": "1.73.0",
     "@types/which": "^3.0.4",
+    "@types/ws": "^8.18.1",
     "@types/xml2js": "^0.4.14",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",
@@ -1170,7 +1218,7 @@
     "vscode-chrome-debug-core": "^6.8.11",
     "vscode-wizard": "^0.2.20",
     "which": "^3.0.1",
-    "ws": "^8.18.3",
+    "ws": "^8.21.0",
     "xml2js": "^0.5.0"
   }
 }
