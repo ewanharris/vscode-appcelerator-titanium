@@ -94,19 +94,25 @@ The sidecar `.map` written by the Alloy compiler references the user source:
 
 `sources[0]` is the wrapper template (still a placeholder; not a user file). `sources[1]` is the real user file, including platform-override path when applicable.
 
-#### Chain
+#### How the two maps are used
 
-To translate V8 → user source for an Alloy script:
+The inline and sidecar maps don't combine the same way for every Alloy artifact. Two patterns appear, picked by comparing source-array lengths:
 
-```
-(V8 URL, line, col)
-  ↓ inline map mappings
-(Alloy intermediate "virtual position", line, col)
-  ↓ Alloy .map mappings
-(user source, line, col)
-```
+**Same number of sources (controllers, widgets, lib files).** The inline placeholder name at index `i` corresponds to the sidecar's real source name at index `i`. Inline's `originalPositionFor` already returns line/col in the user-source coordinate space — babel was effectively handed the user file directly. The resolver:
 
-Conceptually two `SourceMapConsumer.originalPositionFor` calls. `SourceMapGenerator.applySourceMap` is not used for composition — it matches by source name, and the placeholder names (`template.js`, `index.js`) don't line up cleanly with the Alloy map's source array. Chaining by line/col at lookup time avoids the name-matching problem.
+1. Calls `inline.originalPositionFor(generatedLine, col)` → `(placeholder, userLine, userCol)`.
+2. Looks up the user-source path from the sidecar at the same index as the placeholder.
+3. Returns `(userPath, userLine, userCol)`.
+
+No chaining through intermediate line numbers is needed; the placeholder source name is only used as a key to find the corresponding sidecar source.
+
+**Different source counts (entry `app.js`).** The inline map has one source (`app.js`); the sidecar has two (framework template + `app/alloy.js`). Inline is mapping to the alloy intermediate file (`Resources/<platform>/app.js`), not the user source. The resolver chains through:
+
+1. `inline.originalPositionFor(generatedLine, col)` → `(intermediateLine, intermediateCol)`.
+2. `alloy.originalPositionFor(intermediateLine, intermediateCol)` → `(userPath, userLine, userCol)`.
+3. Returns `(userPath, userLine, userCol)`.
+
+The strategy is selected at init from source-count equality. `SourceMapGenerator.applySourceMap` is not used for composition — it matches by source name, and the placeholder names don't line up with the sidecar's source array.
 
 #### Sources to filter from `Loaded Scripts`
 

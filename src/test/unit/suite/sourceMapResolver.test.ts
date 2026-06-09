@@ -91,3 +91,105 @@ describe('SourceMapResolver / classic', () => {
 		assert.deepEqual(generated, []);
 	});
 });
+
+describe('SourceMapResolver / alloy', () => {
+	let resolver: SourceMapResolver;
+
+	beforeEach(async () => {
+		resolver = new SourceMapResolver();
+		await resolver.init(ALLOY_FIXTURE, 'android');
+	});
+
+	afterEach(() => {
+		resolver.dispose();
+	});
+
+	it('lists deployed scripts as /-rooted V8 URLs', () => {
+		const urls = resolver.listScripts().map(s => s.v8url).sort();
+		assert.deepEqual(urls, [
+			'/alloy/controllers/index.js',
+			'/alloy/widgets/mywidget/controllers/widget.js',
+			'/app.js',
+			'/util.js',
+		]);
+	});
+
+	it('lists the platform-override controller as a userSource', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/alloy/controllers/index.js');
+		assert.ok(script);
+		const expected = path.join(ALLOY_FIXTURE, 'app', 'controllers', 'android', 'index.js');
+		assert.ok(script.userSources.includes(expected),
+			`userSources missing expected path. got: ${script.userSources.join(', ')}`);
+	});
+
+	it('lists the widget platform-override controller as a userSource', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/alloy/widgets/mywidget/controllers/widget.js');
+		assert.ok(script);
+		const expected = path.join(ALLOY_FIXTURE, 'app', 'widgets', 'mywidget', 'controllers', 'android', 'widget.js');
+		assert.ok(script.userSources.includes(expected),
+			`userSources missing expected path. got: ${script.userSources.join(', ')}`);
+	});
+
+	it('lists the lib platform-override as a userSource', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/util.js');
+		assert.ok(script);
+		const expected = path.join(ALLOY_FIXTURE, 'app', 'lib', 'android', 'util.js');
+		assert.ok(script.userSources.includes(expected),
+			`userSources missing expected path. got: ${script.userSources.join(', ')}`);
+	});
+
+	it('lists app/alloy.js as a userSource of /app.js', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/app.js');
+		assert.ok(script);
+		const expected = path.join(ALLOY_FIXTURE, 'app', 'alloy.js');
+		assert.ok(script.userSources.includes(expected),
+			`userSources missing expected path. got: ${script.userSources.join(', ')}`);
+	});
+
+	it('excludes template.js placeholders from userSources', () => {
+		for (const script of resolver.listScripts()) {
+			for (const src of script.userSources) {
+				assert.ok(!src.endsWith('template.js'),
+					`${script.v8url} leaked a template placeholder: ${src}`);
+			}
+		}
+	});
+
+	it('excludes the alloy framework template path from userSources', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/app.js');
+		assert.ok(script);
+		for (const src of script.userSources) {
+			assert.ok(!src.includes('Alloy/template'),
+				`/app.js leaked framework template path: ${src}`);
+		}
+	});
+
+	it('round-trips a user source line through the two-stage chain', () => {
+		const sourcePath = path.join(ALLOY_FIXTURE, 'app', 'controllers', 'android', 'index.js');
+		const generated = resolver.sourceToGenerated(sourcePath, 1, 0);
+		assert.ok(generated.length > 0,
+			'expected at least one GeneratedLocation for the override controller');
+		assert.equal(generated[0].url, '/alloy/controllers/index.js');
+
+		const back = resolver.generatedToSource(generated[0].url, generated[0].line, generated[0].column);
+		assert.ok(back, 'expected generatedToSource to return a SourceLocation for the round-trip');
+		assert.equal(back.source, sourcePath);
+		assert.equal(back.line, 1);
+	});
+
+	it('round-trips the lib override through the chain', () => {
+		const sourcePath = path.join(ALLOY_FIXTURE, 'app', 'lib', 'android', 'util.js');
+		const generated = resolver.sourceToGenerated(sourcePath, 1, 0);
+		assert.ok(generated.length > 0);
+		assert.equal(generated[0].url, '/util.js');
+
+		const back = resolver.generatedToSource(generated[0].url, generated[0].line, generated[0].column);
+		assert.ok(back);
+		assert.equal(back.source, sourcePath);
+		assert.equal(back.line, 1);
+	});
+
+	it('returns null for an unknown V8 URL', () => {
+		assert.equal(resolver.generatedToSource('/not-a-script.js', 1, 0), null);
+	});
+});

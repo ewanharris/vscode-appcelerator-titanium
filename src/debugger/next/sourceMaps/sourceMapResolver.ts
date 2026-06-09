@@ -1,13 +1,14 @@
+import { Dirent } from 'fs';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { RawSourceMap, SourceMapConsumer } from 'source-map';
+import { BasicSourceMapConsumer, IndexedSourceMapConsumer, RawSourceMap, SourceMapConsumer } from 'source-map';
 import { detectProjectType } from './projectType';
 import { extractInlineMap } from './inlineMap';
 import { rebaseSourcePath } from './paths';
 import { GeneratedLocation, Platform, ScriptInfo, SourceLocation } from './types';
 
 interface MapEntry {
-	consumer: SourceMapConsumer;
+	consumer: BasicSourceMapConsumer | IndexedSourceMapConsumer;
 	sourceRoot: string | undefined;
 	rawSources: string[];
 }
@@ -17,14 +18,20 @@ interface ResolvedScript {
 	generatedFile: string;
 	userSources: string[];
 	inline: MapEntry;
-	// Set for Alloy scripts that have a sidecar map. Two-stage chain lands in a
-	// follow-up commit; for now Alloy classic-style attaches still work via the
-	// inline map alone (line numbers may be off by a babel-pass shift).
+	// Set when Alloy's two-stage chain is in use (app.js). For most Alloy
+	// artifacts inline's mappings already use the user source's line space and
+	// only the source name is taken from the sidecar (see initScripts comment).
 	alloy?: MapEntry;
-	// Map from rebased absolute source path back to the raw source name used by
-	// the map that owns it. Needed for sourceToGenerated, since the source-map
-	// library indexes mappings by original-source name, not rebased path.
-	sourceNameByAbsPath: Map<string, { stage: 'inline' | 'alloy'; rawName: string }>;
+	// Lookup tables built once per script depending on the chosen strategy.
+	// `simple` is the same-length index-correspondence between inline and alloy
+	// source arrays. `chain` uses the alloy map for sourceToGenerated forward
+	// lookups and the inline map's single source for the babel-output reverse.
+	strategy: 'simple' | 'chain';
+	sourceByInlineKey: Map<string, string>;
+	inlineKeyBySource: Map<string, string>;
+	// Chain-only: name of the inline source that represents the alloy
+	// intermediate (e.g. 'app.js'). There's exactly one in this case.
+	chainInlineKey?: string;
 }
 
 const ANDROID_ASSETS_REL = [ 'build', 'android', 'assets' ];
@@ -64,21 +71,9 @@ export class SourceMapResolver {
 				}
 			}
 
-			const owningEntry = alloy ?? inline;
-			const sourceNameByAbsPath = new Map<string, { stage: 'inline' | 'alloy'; rawName: string }>();
-			const userSources: string[] = [];
-			for (const rawName of owningEntry.rawSources) {
-				const rebased = rebaseSourcePath(rawName, owningEntry.sourceRoot, projectRoot);
-				if (!rebased) {
-					continue;
-				}
-				userSources.push(rebased);
-				sourceNameByAbsPath.set(rebased, { stage: alloy ? 'alloy' : 'inline', rawName });
-			}
-
-			const script: ResolvedScript = { v8url, generatedFile, userSources, inline, alloy, sourceNameByAbsPath };
+			const script = this.buildScript(v8url, generatedFile, inline, alloy);
 			this.scripts.set(v8url, script);
-			for (const src of userSources) {
+			for (const src of script.userSources) {
 				const list = this.scriptsBySource.get(src) ?? [];
 				list.push(script);
 				this.scriptsBySource.set(src, list);
@@ -99,22 +94,34 @@ export class SourceMapResolver {
 		if (!script) {
 			return null;
 		}
+		if (script.strategy === 'simple') {
+			const pos = script.inline.consumer.originalPositionFor({ line, column });
+			if (pos.line === null || pos.source === null) {
+				return null;
+			}
+			const userPath = script.sourceByInlineKey.get(pos.source);
+			if (!userPath) {
+				return null;
+			}
+			return { source: userPath, line: pos.line, column: pos.column ?? 0 };
+		}
 		const inlinePos = script.inline.consumer.originalPositionFor({ line, column });
 		if (inlinePos.line === null) {
 			return null;
 		}
-		if (script.alloy) {
-			// Phase 1c-α implements classic only; alloy chain follows.
+		const alloy = script.alloy as MapEntry;
+		const alloyPos = alloy.consumer.originalPositionFor({
+			line: inlinePos.line,
+			column: inlinePos.column ?? 0,
+		});
+		if (alloyPos.line === null || alloyPos.source === null) {
 			return null;
 		}
-		if (inlinePos.source === null) {
+		const userPath = script.sourceByInlineKey.get(alloyPos.source);
+		if (!userPath) {
 			return null;
 		}
-		const rebased = rebaseSourcePath(inlinePos.source, script.inline.sourceRoot, this.projectRoot);
-		if (!rebased) {
-			return null;
-		}
-		return { source: rebased, line: inlinePos.line, column: inlinePos.column ?? 0 };
+		return { source: userPath, line: alloyPos.line, column: alloyPos.column ?? 0 };
 	}
 
 	sourceToGenerated(absPath: string, line: number, column: number): GeneratedLocation[] {
@@ -124,19 +131,33 @@ export class SourceMapResolver {
 		}
 		const results: GeneratedLocation[] = [];
 		for (const script of candidates) {
-			const entry = script.sourceNameByAbsPath.get(absPath);
-			if (!entry) {
+			const key = script.inlineKeyBySource.get(absPath);
+			if (!key) {
 				continue;
 			}
-			if (entry.stage === 'alloy') {
-				// Reverse alloy chain lands with the forward chain in a follow-up.
+			if (script.strategy === 'simple') {
+				const pos = script.inline.consumer.generatedPositionFor({ source: key, line, column });
+				if (pos.line === null) {
+					continue;
+				}
+				results.push({ url: script.v8url, line: pos.line, column: pos.column ?? 0 });
 				continue;
 			}
-			const pos = script.inline.consumer.generatedPositionFor({ source: entry.rawName, line, column });
-			if (pos.line === null) {
+			const alloy = script.alloy as MapEntry;
+			const intermediatePos = alloy.consumer.generatedPositionFor({ source: key, line, column });
+			if (intermediatePos.line === null) {
 				continue;
 			}
-			results.push({ url: script.v8url, line: pos.line, column: pos.column ?? 0 });
+			const inlineKey = script.chainInlineKey as string;
+			const genPos = script.inline.consumer.generatedPositionFor({
+				source: inlineKey,
+				line: intermediatePos.line,
+				column: intermediatePos.column ?? 0,
+			});
+			if (genPos.line === null) {
+				continue;
+			}
+			results.push({ url: script.v8url, line: genPos.line, column: genPos.column ?? 0 });
 		}
 		return results;
 	}
@@ -148,6 +169,74 @@ export class SourceMapResolver {
 		}
 		this.scripts.clear();
 		this.scriptsBySource.clear();
+	}
+
+	private buildScript(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry | undefined): ResolvedScript {
+		// Strategy heuristic. When inline and alloy expose the same number of
+		// sources, Alloy emitted the babel input *as if* it were the user file —
+		// the inline placeholder names (`index.js`, `widget.js`, `util.js`) line
+		// up index-by-index with alloy's real source names, and inline's
+		// originalPositionFor already returns user-source line/col. When the
+		// counts differ (notably `app.js`, where inline has one source and alloy
+		// has two), inline is mapping straight to the alloy intermediate and we
+		// need the sidecar to bridge to the user file.
+		if (!alloy) {
+			return this.buildSimple(v8url, generatedFile, inline, inline);
+		}
+		if (inline.consumer.sources.length === alloy.rawSources.length) {
+			return this.buildSimple(v8url, generatedFile, inline, alloy);
+		}
+		return this.buildChain(v8url, generatedFile, inline, alloy);
+	}
+
+	private buildSimple(v8url: string, generatedFile: string, inline: MapEntry, sourceMap: MapEntry): ResolvedScript {
+		const inlineKeys = inline.consumer.sources;
+		const sourceByInlineKey = new Map<string, string>();
+		const inlineKeyBySource = new Map<string, string>();
+		for (let i = 0; i < inlineKeys.length; i++) {
+			const userRaw = sourceMap.rawSources[i];
+			if (userRaw === undefined) {
+				continue;
+			}
+			const rebased = rebaseSourcePath(userRaw, sourceMap.sourceRoot, this.projectRoot);
+			if (!rebased) {
+				continue;
+			}
+			sourceByInlineKey.set(inlineKeys[i], rebased);
+			inlineKeyBySource.set(rebased, inlineKeys[i]);
+		}
+		const userSources = Array.from(sourceByInlineKey.values());
+		// For classic (sourceMap === inline) we keep the inline consumer for
+		// lookups but the sidecar map (if any) is no longer needed. For alloy
+		// simple-strategy we likewise only need inline's mappings going forward —
+		// the sidecar was consulted only for its source names.
+		if (sourceMap !== inline) {
+			sourceMap.consumer.destroy();
+		}
+		return {
+			v8url, generatedFile, userSources, inline,
+			strategy: 'simple', sourceByInlineKey, inlineKeyBySource,
+		};
+	}
+
+	private buildChain(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry): ResolvedScript {
+		const alloySources = alloy.consumer.sources;
+		const sourceByInlineKey = new Map<string, string>();
+		const inlineKeyBySource = new Map<string, string>();
+		for (let i = 0; i < alloySources.length; i++) {
+			const rebased = rebaseSourcePath(alloy.rawSources[i], alloy.sourceRoot, this.projectRoot);
+			if (!rebased) {
+				continue;
+			}
+			sourceByInlineKey.set(alloySources[i], rebased);
+			inlineKeyBySource.set(rebased, alloySources[i]);
+		}
+		const userSources = Array.from(sourceByInlineKey.values());
+		const chainInlineKey = inline.consumer.sources[0];
+		return {
+			v8url, generatedFile, userSources, inline, alloy,
+			strategy: 'chain', sourceByInlineKey, inlineKeyBySource, chainInlineKey,
+		};
 	}
 }
 
@@ -170,24 +259,20 @@ async function tryReadRawMap(p: string): Promise<RawSourceMap | null> {
 }
 
 async function walkJs(dir: string): Promise<string[]> {
+	let entries: Dirent[];
+	try {
+		entries = await fs.readdir(dir, { withFileTypes: true, recursive: true });
+	} catch {
+		return [];
+	}
 	const results: string[] = [];
-	const stack = [ dir ];
-	while (stack.length > 0) {
-		const current = stack.pop() as string;
-		let entries;
-		try {
-			entries = await fs.readdir(current, { withFileTypes: true });
-		} catch {
+	for (const entry of entries) {
+		if (!entry.isFile() || !entry.name.endsWith('.js')) {
 			continue;
 		}
-		for (const entry of entries) {
-			const full = path.join(current, entry.name);
-			if (entry.isDirectory()) {
-				stack.push(full);
-			} else if (entry.isFile() && full.endsWith('.js')) {
-				results.push(full);
-			}
-		}
+		// Dirent.parentPath was added in Node 20 and gives the directory holding the entry.
+		const parent = (entry as Dirent & { parentPath: string }).parentPath;
+		results.push(path.join(parent, entry.name));
 	}
 	return results;
 }
