@@ -110,8 +110,21 @@ describe('SourceMapResolver / alloy', () => {
 			'/alloy/controllers/index.js',
 			'/alloy/widgets/mywidget/controllers/widget.js',
 			'/app.js',
+			'/ti.main.js',
 			'/util.js',
 		]);
+	});
+
+	it('excludes Resources/ sources from userSources in alloy projects', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/ti.main.js');
+		assert.ok(script, '/ti.main.js should be in scripts (it has an inline source map)');
+		assert.deepEqual(script.userSources, [],
+			'Resources/ paths must not appear in userSources for alloy projects');
+	});
+
+	it('isKnownScript returns false for scripts whose sources are only under Resources/', () => {
+		assert.equal(resolver.isKnownScript('/ti.main.js'), false,
+			'SDK bootstrap scripts that map to Resources/ should not be treated as user scripts');
 	});
 
 	it('lists the platform-override controller as a userSource', () => {

@@ -1,20 +1,59 @@
-import { InitializedEvent, LoggingDebugSession, OutputEvent, TerminatedEvent } from '@vscode/debugadapter';
+import * as path from 'path';
+import {
+	BreakpointEvent, ContinuedEvent, InitializedEvent, LoggingDebugSession, OutputEvent,
+	Source, StackFrame, StoppedEvent, TerminatedEvent, Thread,
+} from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { CDPConnection } from './v8/cdpConnection';
+import {
+	CDPBreakpointResolvedParams, CDPCallFrame, CDPPausedParams,
+	CDPScriptParsedParams, CDPSetBreakpointByUrlResult,
+} from './v8/types';
+import { GeneratedLocation } from './sourceMaps/types';
+import { SourceMapResolver } from './sourceMaps/sourceMapResolver';
+
+const THREAD_ID = 1;
 
 interface AttachRequestArguments extends DebugProtocol.AttachRequestArguments {
 	platform: 'android';
 	port: number;
 	host?: string;
 	trace?: boolean;
+	/** Absolute path to the project root. Injected by resolveDebugConfiguration; falls back to cwd. */
+	projectRoot?: string;
+}
+
+interface ActiveBreakpoint {
+	dapId: number;
+	requestedLine: number;
+	/** Undefined when the source is not in the resolver (unresolvable breakpoint). */
+	generatedLocation?: GeneratedLocation;
+	/** Set after the CDP setBreakpointByUrl response arrives. */
+	cdpBreakpointId?: string;
 }
 
 export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 	private connection?: CDPConnection;
+	private readonly resolver = new SourceMapResolver();
 	private attachStartedAt = 0;
 	private trace = false;
 	private clientInitiatedDisconnect = false;
+
+	// scriptId → V8 URL (populated via Debugger.scriptParsed)
+	private readonly scriptIdToUrl = new Map<string, string>();
+
+	// user source path → active breakpoints for that source
+	private readonly breakpointsBySource = new Map<string, ActiveBreakpoint[]>();
+
+	// Per-source serial queue: chains CDP remove/set operations so rapid successive
+	// setBreakpoints calls for the same source can't produce "already exists" errors.
+	private readonly breakpointOps = new Map<string, Promise<void>>();
+
+	// non-null while the VM is paused
+	private pausedCallFrames: CDPCallFrame[] | null = null;
+
+	private nextBreakpointId = 1;
 
 	private logEvent(message: string): void {
 		if (!this.trace) {
@@ -26,16 +65,11 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 	override initializeRequest(response: DebugProtocol.InitializeResponse, _args: DebugProtocol.InitializeRequestArguments): void {
 		response.body = response.body ?? {};
-		// Advertised so Phase 1c can use configurationDoneRequest as the "start running
-		// after breakpoints are set" hook. Currently the handler just acks.
 		response.body.supportsConfigurationDoneRequest = true;
 		this.sendResponse(response);
 	}
 
 	override launchRequest(response: DebugProtocol.LaunchResponse, _args: DebugProtocol.LaunchRequestArguments): void {
-		// Launch is not implemented yet — Phase 1f wires build orchestration.
-		// Surface a clear error rather than silently terminating so users know what's
-		// happening if they pick a launch config.
 		this.sendErrorResponse(response, 1010, 'Launch is not yet implemented for \'titanium-next\'. Use \'attach\' instead.');
 	}
 
@@ -48,12 +82,12 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 			return;
 		}
 
+		const projectRoot = args.projectRoot ?? process.cwd();
 		const host = args.host ?? 'localhost';
-		const port = args.port;
-		const url = `ws://${host}:${port}`;
-		this.logEvent(`connecting to ${url}`);
+		const wsUrl = `ws://${host}:${args.port}`;
+		this.logEvent(`connecting to ${wsUrl}`);
 
-		const connection = new CDPConnection(url);
+		const connection = new CDPConnection(wsUrl);
 		connection.on('close', () => {
 			if (!this.clientInitiatedDisconnect) {
 				this.sendEvent(new TerminatedEvent());
@@ -61,31 +95,85 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		});
 
 		try {
-			// Titanium's V8 inspector exposes no Chrome-style discovery; connect
-			// directly to the WebSocket at the inspector port. Matches what the
-			// legacy adapter does in TitaniumTargetDiscovery.
 			await connection.connect();
 			this.connection = connection;
 			this.logEvent('WebSocket connected');
 
-			// Issue all four CDP messages in parallel rather than awaiting each in
-			// series. The Titanium SDK queues inbound messages during its 60s wait
-			// and only dispatches them to V8 after the wait ends — so awaiting one
-			// response blocks all subsequent sends, and our magic-unlock message
-			// (Runtime.runIfWaitingForDebugger) never reaches the SDK during the
-			// wait. Sending in parallel ensures it arrives in the wait window.
-			await Promise.all([
-				connection.send('Runtime.enable'),
-				connection.send('Debugger.enable'),
-				// Phase 1b has no pause handling yet — tell V8 to ignore debugger;
-				// statements and breakpoints so the JS thread never freezes (which
-				// would block the app's main thread and trigger an Android ANR).
-				// Phase 1c removes this and wires real pause/resume.
-				connection.send('Debugger.setSkipAllPauses', { skip: true }),
-				// Releases the Titanium SDK from its 60s wait in JSDebugger.waitForDebugger.
-				connection.send('Runtime.runIfWaitingForDebugger'),
-			]);
-			this.logEvent('CDP domains enabled');
+			// Subscribe before enabling domains so no events are missed.
+			connection.on('Debugger.scriptParsed', (params: CDPScriptParsedParams) => {
+				// Only track /-rooted URLs; SDK internals use schemes like kroll:// or ti://
+				if (params.url.startsWith('/')) {
+					this.scriptIdToUrl.set(params.scriptId, params.url);
+				}
+				const known = this.resolver.isKnownScript(params.url);
+				this.logEvent(`scriptParsed: ${params.url} (id=${params.scriptId}, known=${known})`);
+			});
+
+			connection.on('Debugger.paused', (params: CDPPausedParams) => {
+				const topFrame = params.callFrames[0];
+				const topUrl = topFrame
+					? (this.scriptIdToUrl.get(topFrame.location.scriptId) ?? topFrame.url)
+					: '';
+
+				if (params.hitBreakpoints?.length) {
+					this.logEvent(`paused: hitBreakpoints=[${params.hitBreakpoints.join(', ')}]`);
+				}
+
+				// Auto-resume when paused inside SDK-internal code that the resolver
+				// cannot map to user source (e.g. ti.main.js, kroll bootstrap).
+				if (!this.resolver.isKnownScript(topUrl)) {
+					this.logEvent(`paused in non-user script (${topUrl || 'unknown'}) — resuming`);
+					connection.send('Debugger.resume').catch(err =>
+						this.logEvent(`Debugger.resume error: ${(err as Error).message}`)
+					);
+					return;
+				}
+
+				this.pausedCallFrames = params.callFrames;
+				const reason = params.reason === 'exception' ? 'exception' : 'breakpoint';
+				this.logEvent(`paused: reason=${params.reason} url=${topUrl} line=${(topFrame?.location.lineNumber ?? -1) + 1}`);
+				this.sendEvent(new StoppedEvent(reason, THREAD_ID));
+			});
+
+			// Fired when a pending setBreakpointByUrl breakpoint resolves against a
+			// newly-parsed script. Updates the gutter from unverified to verified.
+			connection.on('Debugger.breakpointResolved', (params: CDPBreakpointResolvedParams) => {
+				const genLine = params.location.lineNumber + 1;
+				this.logEvent(`breakpointResolved: cdp-id=${params.breakpointId} scriptId=${params.location.scriptId} line=${genLine}`);
+				for (const bps of this.breakpointsBySource.values()) {
+					const bp = bps.find(b => b.cdpBreakpointId === params.breakpointId);
+					if (bp) {
+						const v8url = this.scriptIdToUrl.get(params.location.scriptId);
+						const userLoc = v8url
+							? this.resolver.generatedToSource(v8url, genLine, params.location.columnNumber)
+							: null;
+						const resolvedLine = userLoc?.line ?? bp.requestedLine;
+						this.sendEvent(new BreakpointEvent('changed', { id: bp.dapId, verified: true, line: resolvedLine }));
+						this.logEvent(`bp ${bp.dapId} resolved → ${v8url}:${genLine} → user:${resolvedLine}`);
+						return;
+					}
+				}
+				this.logEvent(`breakpointResolved: cdp-id=${params.breakpointId} not found in active breakpoints`);
+			});
+
+			await this.resolver.init(projectRoot, args.platform);
+			const resolvedScripts = this.resolver.listScripts();
+			this.logEvent(`resolver initialised: ${resolvedScripts.length} scripts`);
+			for (const s of resolvedScripts) {
+				this.logEvent(`  resolver: ${s.v8url} → [${s.userSources.join(', ')}]`);
+			}
+
+			// Fire-and-forget: domain enables queue in the Titanium SDK during its 60-second
+			// startup wait. configurationDoneRequest sends Runtime.runIfWaitingForDebugger,
+			// which releases the wait and flushes the queue. Awaiting these here would
+			// deadlock because their responses cannot arrive until the wait ends.
+			connection.send('Runtime.enable').catch(err =>
+				this.logEvent(`Runtime.enable error: ${(err as Error).message}`)
+			);
+			connection.send('Debugger.enable').catch(err =>
+				this.logEvent(`Debugger.enable error: ${(err as Error).message}`)
+			);
+			this.logEvent('CDP domain enables dispatched');
 
 			this.sendResponse(response);
 			this.sendEvent(new InitializedEvent());
@@ -97,16 +185,201 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	override configurationDoneRequest(response: DebugProtocol.ConfigurationDoneResponse, _args: DebugProtocol.ConfigurationDoneArguments): void {
-		this.logEvent('configurationDone');
-		// Runtime.runIfWaitingForDebugger is sent in attachRequest as part of the parallel
-		// initial-message batch. Phase 1c will repurpose this handler for "start running
-		// after breakpoints are set".
+	override setBreakPointsRequest(
+		response: DebugProtocol.SetBreakpointsResponse,
+		args: DebugProtocol.SetBreakpointsArguments,
+	): void {
+		const sourcePath = args.source.path ?? '';
+		const requestedBps = args.breakpoints ?? [];
+		const connection = this.connection;
+
+		this.logEvent(`setBreakpoints: source=${sourcePath} count=${requestedBps.length}`);
+
+		// Capture prev before overwriting the map.
+		const prev = this.breakpointsBySource.get(sourcePath) ?? [];
+
+		// Build new ActiveBreakpoint entries synchronously so we can respond to DAP immediately.
+		const activeBps: ActiveBreakpoint[] = requestedBps.map(reqBp => {
+			const dapId = this.nextBreakpointId++;
+			const generated = connection
+				? this.resolver.sourceToGenerated(sourcePath, reqBp.line, 0)
+				: [];
+			const loc = generated[0];
+			this.logEvent(`  bp#${dapId} line=${reqBp.line} → ${loc ? `${loc.url}:${loc.line}:${loc.column}` : 'unresolved (no source map match)'}`);
+			return {
+				dapId,
+				requestedLine: reqBp.line,
+				generatedLocation: loc,
+			};
+		});
+
+		this.breakpointsBySource.set(sourcePath, activeBps);
+		response.body = {
+			breakpoints: activeBps.map(bp => ({ id: bp.dapId, verified: false, line: bp.requestedLine })),
+		};
+		this.sendResponse(response);
+
+		if (!connection) {
+			return;
+		}
+
+		// Chain CDP operations through a per-source queue so that a rapid second
+		// setBreakpoints call for the same source waits for the first round's removes
+		// to complete before sending new setBreakpointByUrl requests. Without this,
+		// in-flight bps from round N have no cdpBreakpointId yet and can't be removed
+		// before round N+1 sends the same location again ("already exists" error).
+		const prevOp = this.breakpointOps.get(sourcePath) ?? Promise.resolve();
+		const nextOp = prevOp
+			.then(() => this.applyBreakpoints(connection, prev, activeBps))
+			.catch(err => this.logEvent(`applyBreakpoints: ${(err as Error).message}`));
+		this.breakpointOps.set(sourcePath, nextOp);
+	}
+
+	private async applyBreakpoints(
+		connection: CDPConnection,
+		prev: ActiveBreakpoint[],
+		current: ActiveBreakpoint[],
+	): Promise<void> {
+		// Remove old CDP breakpoints first, in order, so V8 processes removes before
+		// the new setBreakpointByUrl calls for the same locations.
+		for (const bp of prev) {
+			if (!bp.cdpBreakpointId) {
+				continue;
+			}
+			await connection.send('Debugger.removeBreakpoint', { breakpointId: bp.cdpBreakpointId })
+				.catch(err => this.logEvent(`removeBreakpoint: ${(err as Error).message}`));
+		}
+
+		// Track generated locations set in this round. Multiple user lines can map to
+		// the same generated location (e.g. after V8 snapping); sending the same
+		// URL+line twice produces an "already exists" CDP error.
+		const locationSet = new Map<string, { breakpointId: string; verified: boolean; resolvedLine: number }>();
+
+		for (const active of current) {
+			if (!active.generatedLocation) {
+				continue;
+			}
+			const { url, line, column } = active.generatedLocation;
+			const locationKey = `${url}:${line}:${column}`;
+
+			const existing = locationSet.get(locationKey);
+			if (existing) {
+				active.cdpBreakpointId = existing.breakpointId;
+				this.sendEvent(new BreakpointEvent('changed', { id: active.dapId, verified: existing.verified, line: existing.resolvedLine }));
+				this.logEvent(`bp ${active.dapId} duplicate of ${existing.breakpointId} → user:${existing.resolvedLine}`);
+				continue;
+			}
+
+			try {
+				// CDP uses 0-based line numbers; source-map returns 1-based → subtract 1.
+				const result = await connection.send<CDPSetBreakpointByUrlResult>('Debugger.setBreakpointByUrl', {
+					url,
+					lineNumber: line - 1,
+					columnNumber: column,
+				});
+				active.cdpBreakpointId = result.breakpointId;
+				const verified = result.locations.length > 0;
+				let resolvedLine = active.requestedLine;
+				if (verified) {
+					const cdpLoc = result.locations[0];
+					const userLoc = this.resolver.generatedToSource(url, cdpLoc.lineNumber + 1, cdpLoc.columnNumber);
+					resolvedLine = userLoc?.line ?? active.requestedLine;
+					this.logEvent(`bp ${active.dapId} verified → ${url}:${cdpLoc.lineNumber + 1} → user:${resolvedLine}`);
+				} else {
+					this.logEvent(`bp ${active.dapId} unresolved → ${url}`);
+				}
+				this.sendEvent(new BreakpointEvent('changed', { id: active.dapId, verified, line: resolvedLine }));
+				locationSet.set(locationKey, { breakpointId: result.breakpointId, verified, resolvedLine });
+			} catch (err) {
+				this.logEvent(`setBreakpointByUrl failed for ${url}: ${(err as Error).message}`);
+			}
+		}
+	}
+
+	override configurationDoneRequest(
+		response: DebugProtocol.ConfigurationDoneResponse,
+		_args: DebugProtocol.ConfigurationDoneArguments,
+	): void {
+		this.logEvent('configurationDone — releasing SDK startup wait');
+		// All domain enables and setBreakpointByUrl calls above are queued in the Titanium
+		// SDK. This message unblocks the SDK, draining the queue into V8 in arrival order —
+		// breakpoints land before any user code executes.
+		this.connection?.send('Runtime.runIfWaitingForDebugger').catch(err =>
+			this.logEvent(`runIfWaitingForDebugger error: ${(err as Error).message}`)
+		);
+		this.sendResponse(response);
+	}
+
+	override threadsRequest(response: DebugProtocol.ThreadsResponse): void {
+		response.body = { threads: [ new Thread(THREAD_ID, 'main') ] };
+		this.sendResponse(response);
+	}
+
+	override stackTraceRequest(
+		response: DebugProtocol.StackTraceResponse,
+		args: DebugProtocol.StackTraceArguments,
+	): void {
+		const frames = this.pausedCallFrames ?? [];
+		const startFrame = args.startFrame ?? 0;
+		const levels = args.levels ?? frames.length;
+		const slice = frames.slice(startFrame, startFrame + levels);
+
+		this.logEvent(`stackTrace: ${frames.length} frames (slice ${startFrame}..${startFrame + slice.length})`);
+		const dapFrames = slice.map((frame, i) => {
+			const v8url = this.scriptIdToUrl.get(frame.location.scriptId) ?? frame.url;
+			const cdpLine = frame.location.lineNumber + 1;
+			// CDP 0-based lines → resolver 1-based lines; columns are 0-based in both.
+			const loc = v8url
+				? this.resolver.generatedToSource(v8url, cdpLine, frame.location.columnNumber)
+				: null;
+
+			const name = frame.functionName || '(anonymous)';
+			if (loc) {
+				this.logEvent(`  frame[${startFrame + i}] ${name}: ${v8url}:${cdpLine} → ${loc.source}:${loc.line}:${loc.column}`);
+				return new StackFrame(
+					startFrame + i,
+					name,
+					new Source(path.basename(loc.source), loc.source),
+					loc.line,
+					loc.column,
+				);
+			}
+			// No source-map resolution — fall back to the raw generated file if it
+			// exists in build/android/assets/ (e.g. ti.main.js, SDK bootstrap files).
+			const assetPath = v8url ? this.resolver.generatedFileFor(v8url) : null;
+			this.logEvent(`  frame[${startFrame + i}] ${name}: ${v8url}:${cdpLine} → unresolved (asset=${assetPath ?? 'none'})`);
+			return new StackFrame(
+				startFrame + i,
+				name,
+				assetPath
+					? new Source(path.basename(assetPath), assetPath)
+					: new Source(path.basename(v8url || 'unknown')),
+				frame.location.lineNumber + 1,
+				frame.location.columnNumber,
+			);
+		});
+
+		response.body = { stackFrames: dapFrames, totalFrames: frames.length };
+		this.sendResponse(response);
+	}
+
+	override continueRequest(
+		response: DebugProtocol.ContinueResponse,
+		_args: DebugProtocol.ContinueArguments,
+	): void {
+		this.pausedCallFrames = null;
+		this.connection?.send('Debugger.resume').catch(err =>
+			this.logEvent(`Debugger.resume error: ${(err as Error).message}`)
+		);
+		this.sendEvent(new ContinuedEvent(THREAD_ID));
+		response.body = { allThreadsContinued: true };
 		this.sendResponse(response);
 	}
 
 	override disconnectRequest(response: DebugProtocol.DisconnectResponse, args: DebugProtocol.DisconnectArguments): void {
 		this.clientInitiatedDisconnect = true;
+		this.resolver.dispose();
+		this.breakpointOps.clear();
 		this.connection?.disconnect();
 		this.connection = undefined;
 		super.disconnectRequest(response, args);

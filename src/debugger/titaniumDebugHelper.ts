@@ -94,6 +94,18 @@ export function registerDebugProvider (ctx: vscode.ExtensionContext): void {
 	);
 
 	ctx.subscriptions.push(
+		vscode.debug.registerDebugConfigurationProvider('titanium-next', {
+			resolveDebugConfiguration (folder: vscode.WorkspaceFolder | undefined, config: vscode.DebugConfiguration): vscode.DebugConfiguration {
+				if (!config.projectRoot) {
+					config.projectRoot = folder?.uri.fsPath
+						?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+				}
+				return config;
+			},
+		})
+	);
+
+	ctx.subscriptions.push(
 		vscode.debug.registerDebugAdapterDescriptorFactory('titanium-next', {
 			createDebugAdapterDescriptor: () =>
 				new vscode.DebugAdapterInlineImplementation(new TitaniumNextDebugSession()),

@@ -277,6 +277,11 @@
                 "type": "boolean",
                 "default": false,
                 "description": "When true, the debug adapter emits per-step diagnostic OutputEvents to the Debug Console. Off by default."
+              },
+              "projectRoot": {
+                "type": "string",
+                "default": "${workspaceFolder}",
+                "description": "Absolute path to the Titanium project root. Used to resolve source maps. Defaults to ${workspaceFolder}."
               }
             }
           }

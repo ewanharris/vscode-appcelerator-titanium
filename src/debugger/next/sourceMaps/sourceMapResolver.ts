@@ -40,8 +40,13 @@ const ANDROID_MAP_REL = [ 'build', 'map', 'Resources', 'android' ];
 export class SourceMapResolver {
 
 	private projectRoot = '';
+	private projectType: 'classic' | 'alloy' = 'classic';
 	private readonly scripts = new Map<string, ResolvedScript>();
 	private readonly scriptsBySource = new Map<string, ResolvedScript[]>();
+	// All JS files found in build/android/assets/, keyed by V8 URL.
+	// Populated for every .js file regardless of whether a source map was found,
+	// so we can return the raw generated file as a fallback source for SDK scripts.
+	private readonly assetByV8url = new Map<string, string>();
 
 	async init(projectRoot: string, platform: Platform): Promise<void> {
 		if (platform !== 'android') {
@@ -49,12 +54,16 @@ export class SourceMapResolver {
 		}
 		this.projectRoot = projectRoot;
 		const projectType = await detectProjectType(projectRoot);
+		this.projectType = projectType;
 		const assetsDir = path.join(projectRoot, ...ANDROID_ASSETS_REL);
 		const jsFiles = await walkJs(assetsDir);
 
 		for (const generatedFile of jsFiles) {
 			const rel = path.relative(assetsDir, generatedFile).split(path.sep).join('/');
 			const v8url = '/' + rel;
+			// Track every asset regardless of source map so generatedFileFor() can
+			// return a real path for SDK scripts that have no source map.
+			this.assetByV8url.set(v8url, generatedFile);
 			const fileText = await fs.readFile(generatedFile, 'utf8');
 			const rawInline = extractInlineMap(fileText);
 			if (!rawInline) {
@@ -162,6 +171,21 @@ export class SourceMapResolver {
 		return results;
 	}
 
+	/**
+	 * Returns true when the V8 URL has a source map that resolves to at least one
+	 * user source file. Scripts that have a source map but whose sources all resolve
+	 * to SDK-internal paths (e.g. ti.main.js after the babel pass) return false.
+	 */
+	isKnownScript(v8url: string): boolean {
+		const script = this.scripts.get(v8url);
+		return script !== undefined && script.userSources.length > 0;
+	}
+
+	/** Returns the absolute path of the generated file for a V8 URL, or null if unknown. */
+	generatedFileFor(v8url: string): string | null {
+		return this.assetByV8url.get(v8url) ?? null;
+	}
+
 	dispose(): void {
 		for (const script of this.scripts.values()) {
 			script.inline.consumer.destroy();
@@ -169,6 +193,19 @@ export class SourceMapResolver {
 		}
 		this.scripts.clear();
 		this.scriptsBySource.clear();
+		this.assetByV8url.clear();
+	}
+
+	/**
+	 * For Alloy projects, only files under the `app/` subtree are user-authored;
+	 * `Resources/` contains compiled output from Alloy and SDK bundled scripts.
+	 * Classic projects treat all rebased paths as user sources.
+	 */
+	private isUserSourcePath(absPath: string): boolean {
+		if (this.projectType === 'alloy') {
+			return absPath.startsWith(path.join(this.projectRoot, 'app') + path.sep);
+		}
+		return true;
 	}
 
 	private buildScript(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry | undefined): ResolvedScript {
@@ -199,7 +236,7 @@ export class SourceMapResolver {
 				continue;
 			}
 			const rebased = rebaseSourcePath(userRaw, sourceMap.sourceRoot, this.projectRoot);
-			if (!rebased) {
+			if (!rebased || !this.isUserSourcePath(rebased)) {
 				continue;
 			}
 			sourceByInlineKey.set(inlineKeys[i], rebased);
@@ -225,7 +262,7 @@ export class SourceMapResolver {
 		const inlineKeyBySource = new Map<string, string>();
 		for (let i = 0; i < alloySources.length; i++) {
 			const rebased = rebaseSourcePath(alloy.rawSources[i], alloy.sourceRoot, this.projectRoot);
-			if (!rebased) {
+			if (!rebased || !this.isUserSourcePath(rebased)) {
 				continue;
 			}
 			sourceByInlineKey.set(alloySources[i], rebased);
