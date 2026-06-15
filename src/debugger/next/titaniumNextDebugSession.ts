@@ -130,7 +130,9 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 				}
 
 				this.pausedCallFrames = params.callFrames;
-				const reason = params.reason === 'exception' ? 'exception' : 'breakpoint';
+				const reason = params.reason === 'exception'
+					? 'exception'
+					: params.hitBreakpoints?.length ? 'breakpoint' : 'step';
 				this.logEvent(`paused: reason=${params.reason} url=${topUrl} line=${(topFrame?.location.lineNumber ?? -1) + 1}`);
 				this.sendEvent(new StoppedEvent(reason, THREAD_ID));
 			});
@@ -373,6 +375,42 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		);
 		this.sendEvent(new ContinuedEvent(THREAD_ID));
 		response.body = { allThreadsContinued: true };
+		this.sendResponse(response);
+	}
+
+	override nextRequest(
+		response: DebugProtocol.NextResponse,
+		_args: DebugProtocol.NextArguments,
+	): void {
+		this.pausedCallFrames = null;
+		this.connection?.send('Debugger.stepOver').catch(err =>
+			this.logEvent(`Debugger.stepOver error: ${(err as Error).message}`)
+		);
+		this.sendEvent(new ContinuedEvent(THREAD_ID));
+		this.sendResponse(response);
+	}
+
+	override stepInRequest(
+		response: DebugProtocol.StepInResponse,
+		_args: DebugProtocol.StepInArguments,
+	): void {
+		this.pausedCallFrames = null;
+		this.connection?.send('Debugger.stepInto').catch(err =>
+			this.logEvent(`Debugger.stepInto error: ${(err as Error).message}`)
+		);
+		this.sendEvent(new ContinuedEvent(THREAD_ID));
+		this.sendResponse(response);
+	}
+
+	override stepOutRequest(
+		response: DebugProtocol.StepOutResponse,
+		_args: DebugProtocol.StepOutArguments,
+	): void {
+		this.pausedCallFrames = null;
+		this.connection?.send('Debugger.stepOut').catch(err =>
+			this.logEvent(`Debugger.stepOut error: ${(err as Error).message}`)
+		);
+		this.sendEvent(new ContinuedEvent(THREAD_ID));
 		this.sendResponse(response);
 	}
 

@@ -487,11 +487,10 @@ describe('TitaniumNextDebugSession / pause and resume', () => {
 		await stopFakeServer(state);
 	});
 
-	it('emits StoppedEvent when Debugger.paused is received', async () => {
+	it('emits StoppedEvent with reason "breakpoint" when hitBreakpoints is non-empty', async () => {
 		const { messages } = await attachSession(state.port, CLASSIC_FIXTURE);
 		await waitForCdpMethod(state, 'Debugger.enable');
 
-		// Server emits a paused event
 		serverSend(state, {
 			method: 'Debugger.paused',
 			params: {
@@ -501,12 +500,35 @@ describe('TitaniumNextDebugSession / pause and resume', () => {
 					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
 					url: '/utils.js',
 				} ],
-				reason: 'breakpoint',
+				reason: 'other',
+				hitBreakpoints: [ 'bp-123' ],
 			},
 		});
 
 		const stopped = await waitForMessage(messages, isEvent('stopped')) as DebugProtocol.StoppedEvent;
 		assert.equal(stopped.body.reason, 'breakpoint');
+		assert.equal(stopped.body.threadId, 1);
+	});
+
+	it('emits StoppedEvent with reason "step" when hitBreakpoints is absent', async () => {
+		const { messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		await waitForCdpMethod(state, 'Debugger.enable');
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+			},
+		});
+
+		const stopped = await waitForMessage(messages, isEvent('stopped')) as DebugProtocol.StoppedEvent;
+		assert.equal(stopped.body.reason, 'step');
 		assert.equal(stopped.body.threadId, 1);
 	});
 
@@ -530,6 +552,135 @@ describe('TitaniumNextDebugSession / pause and resume', () => {
 		assert.ok(resp.success);
 		assert.equal(resp.body.threads.length, 1);
 		assert.equal(resp.body.threads[0].id, 1);
+	});
+
+	it('sends Debugger.stepOver on nextRequest and emits ContinuedEvent', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		// Put the session into a paused state first
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('next', { threadId: 1 }));
+
+		const resp = await waitForMessage(messages, isResponse('next')) as DebugProtocol.NextResponse;
+		assert.ok(resp.success);
+		await waitForCdpMethod(state, 'Debugger.stepOver');
+		assert.ok(state.receivedMethods.includes('Debugger.stepOver'));
+		assert.ok(messages.some(isEvent('continued')), 'ContinuedEvent must be emitted');
+	});
+
+	it('sends Debugger.stepInto on stepInRequest and emits ContinuedEvent', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('stepIn', { threadId: 1 }));
+
+		const resp = await waitForMessage(messages, isResponse('stepIn')) as DebugProtocol.StepInResponse;
+		assert.ok(resp.success);
+		await waitForCdpMethod(state, 'Debugger.stepInto');
+		assert.ok(state.receivedMethods.includes('Debugger.stepInto'));
+		assert.ok(messages.some(isEvent('continued')), 'ContinuedEvent must be emitted');
+	});
+
+	it('sends Debugger.stepOut on stepOutRequest and emits ContinuedEvent', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('stepOut', { threadId: 1 }));
+
+		const resp = await waitForMessage(messages, isResponse('stepOut')) as DebugProtocol.StepOutResponse;
+		assert.ok(resp.success);
+		await waitForCdpMethod(state, 'Debugger.stepOut');
+		assert.ok(state.receivedMethods.includes('Debugger.stepOut'));
+		assert.ok(messages.some(isEvent('continued')), 'ContinuedEvent must be emitted');
+	});
+
+	it('emits StoppedEvent with reason "step" after a step lands on a new line', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		// First pause at a breakpoint
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		// Issue a step
+		session.handleMessage(makeRequest('next', { threadId: 1 }));
+		await waitForMessage(messages, isResponse('next'));
+		await waitForCdpMethod(state, 'Debugger.stepOver');
+
+		// V8 emits another paused with no hitBreakpoints (stepped to next line)
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-2',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 1, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'other',
+			},
+		});
+
+		const stoppedAfterStep = await waitForMessage(messages, m => {
+			if (!isEvent('stopped')(m)) {
+				return false;
+			}
+			return (m as DebugProtocol.StoppedEvent).body.reason === 'step';
+		}) as DebugProtocol.StoppedEvent;
+		assert.equal(stoppedAfterStep.body.reason, 'step');
 	});
 });
 
