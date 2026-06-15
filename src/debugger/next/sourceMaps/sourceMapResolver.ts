@@ -227,10 +227,16 @@ export class SourceMapResolver {
 	}
 
 	private buildSimple(v8url: string, generatedFile: string, inline: MapEntry, sourceMap: MapEntry): ResolvedScript {
-		const inlineKeys = inline.consumer.sources;
+		// Prefer the sidecar as the lookup consumer when one is available. Alloy
+		// controller inline maps can have column-precise generatedPositionFor
+		// entries while omitting the per-line segments originalPositionFor needs,
+		// making V8 pause locations unmappable. The sidecar has correct line-level
+		// mappings in both directions and is the authoritative source for Alloy.
+		const lookupMap = sourceMap !== inline ? sourceMap : inline;
+		const lookupKeys = lookupMap.consumer.sources;
 		const sourceByInlineKey = new Map<string, string>();
 		const inlineKeyBySource = new Map<string, string>();
-		for (let i = 0; i < inlineKeys.length; i++) {
+		for (let i = 0; i < lookupKeys.length; i++) {
 			const userRaw = sourceMap.rawSources[i];
 			if (userRaw === undefined) {
 				continue;
@@ -239,19 +245,15 @@ export class SourceMapResolver {
 			if (!rebased || !this.isUserSourcePath(rebased)) {
 				continue;
 			}
-			sourceByInlineKey.set(inlineKeys[i], rebased);
-			inlineKeyBySource.set(rebased, inlineKeys[i]);
+			sourceByInlineKey.set(lookupKeys[i], rebased);
+			inlineKeyBySource.set(rebased, lookupKeys[i]);
 		}
 		const userSources = Array.from(sourceByInlineKey.values());
-		// For classic (sourceMap === inline) we keep the inline consumer for
-		// lookups but the sidecar map (if any) is no longer needed. For alloy
-		// simple-strategy we likewise only need inline's mappings going forward —
-		// the sidecar was consulted only for its source names.
 		if (sourceMap !== inline) {
-			sourceMap.consumer.destroy();
+			inline.consumer.destroy();
 		}
 		return {
-			v8url, generatedFile, userSources, inline,
+			v8url, generatedFile, userSources, inline: lookupMap,
 			strategy: 'simple', sourceByInlineKey, inlineKeyBySource,
 		};
 	}
