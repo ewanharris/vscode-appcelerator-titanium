@@ -168,6 +168,16 @@ describe('TitaniumNextDebugSession / attach', () => {
 		assert.ok(messages.some(isEvent('initialized')));
 	});
 
+	it('reports supportsEvaluateForHovers in initialize response', async () => {
+		const session = new TitaniumNextDebugSession();
+		const messages: DebugProtocol.ProtocolMessage[] = [];
+		session.onDidSendMessage(m => messages.push(m as DebugProtocol.ProtocolMessage));
+		// pathFormat: 'path' is required — the base class sends an error response without it
+		session.handleMessage(makeRequest('initialize', { adapterID: 'titanium-next', pathFormat: 'path' }));
+		const resp = await waitForMessage(messages, isResponse('initialize')) as DebugProtocol.InitializeResponse;
+		assert.equal(resp.body?.supportsEvaluateForHovers, true);
+	});
+
 	it('sends Runtime.enable and Debugger.enable during attach', async () => {
 		await attachSession(state.port, CLASSIC_FIXTURE);
 		await waitForCdpMethod(state, 'Runtime.enable');
@@ -803,5 +813,238 @@ describe('TitaniumNextDebugSession / alloy fixture', () => {
 		await waitForMessage(messages, isResponse('setBreakpoints'));
 		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
 		assert.equal((cdpReq.params as unknown as CDPSetBreakpointByUrlParams).url, '/alloy/controllers/index.js');
+	});
+});
+
+describe('TitaniumNextDebugSession / scopes and variables', () => {
+	let state: ServerState;
+
+	function pauseWithScopes(st: ServerState): void {
+		serverSend(st, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: 'doSomething',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+					scopeChain: [
+						{ type: 'local', object: { type: 'object', objectId: 'local-obj-1', description: 'Object' } },
+						{ type: 'global', object: { type: 'object', objectId: 'global-obj-1', description: 'Window' } },
+					],
+				} ],
+				reason: 'other',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+	}
+
+	beforeEach(async () => {
+		state = await startFakeServer((req, ws) => {
+			if (req.method === 'Runtime.getProperties') {
+				ws.send(JSON.stringify({ id: req.id, result: { result: [] } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+	});
+
+	afterEach(async () => {
+		await stopFakeServer(state);
+	});
+
+	it('scopesRequest returns scope names and non-zero variablesReferences', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		pauseWithScopes(state);
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+		const resp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+
+		assert.ok(resp.success);
+		assert.equal(resp.body.scopes.length, 2);
+		const [ local, global ] = resp.body.scopes;
+		assert.equal(local.name, 'Local');
+		assert.ok(local.variablesReference > 0);
+		assert.equal(local.expensive, false);
+		assert.equal(global.name, 'Global');
+		assert.ok(global.variablesReference > 0);
+		assert.equal(global.expensive, true);
+	});
+
+	it('scopesRequest returns empty scopes when not paused', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+		const resp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+
+		assert.ok(resp.success);
+		assert.equal(resp.body.scopes.length, 0);
+	});
+
+	it('variablesRequest sends Runtime.getProperties with the correct objectId', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		pauseWithScopes(state);
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+		const scopesResp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+		const localRef = scopesResp.body.scopes[0].variablesReference;
+
+		session.handleMessage(makeRequest('variables', { variablesReference: localRef }));
+		await waitForMessage(messages, isResponse('variables'));
+
+		const getPropsReq = await waitForCdpMethod(state, 'Runtime.getProperties');
+		assert.equal(getPropsReq.params?.objectId, 'local-obj-1');
+	});
+
+	it('variablesRequest maps property descriptors to DAP Variables with correct values and references', async () => {
+		const withProps = await startFakeServer((req, ws) => {
+			if (req.method === 'Runtime.getProperties') {
+				ws.send(JSON.stringify({ id: req.id, result: { result: [
+					{ name: 'x',          value: { type: 'number',    value: 42,      description: '42'    }, enumerable: true  },
+					{ name: 'msg',        value: { type: 'string',    value: 'hello'                       }, enumerable: true  },
+					{ name: 'obj',        value: { type: 'object',    objectId: 'nested-obj', description: 'Object' }, enumerable: true  },
+					{ name: '__hidden__', value: { type: 'string',    value: 'secret'                      }, enumerable: false },
+				] } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withProps.port, CLASSIC_FIXTURE);
+			serverSend(withProps, {
+				method: 'Debugger.paused',
+				params: {
+					callFrames: [ {
+						callFrameId: 'cf-1',
+						functionName: 'fn',
+						location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+						url: '/utils.js',
+						scopeChain: [
+							{ type: 'local', object: { type: 'object', objectId: 'local-obj', description: 'Object' } },
+						],
+					} ],
+					reason: 'other',
+					hitBreakpoints: [ 'bp-1' ],
+				},
+			});
+			await waitForMessage(messages, isEvent('stopped'));
+
+			session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+			const scopesResp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+			const localRef = scopesResp.body.scopes[0].variablesReference;
+
+			session.handleMessage(makeRequest('variables', { variablesReference: localRef }));
+			const varResp = await waitForMessage(messages, isResponse('variables')) as DebugProtocol.VariablesResponse;
+
+			assert.ok(varResp.success);
+			// Non-enumerable property is filtered out
+			assert.equal(varResp.body.variables.length, 3);
+			const [ xVar, msgVar, objVar ] = varResp.body.variables;
+			assert.equal(xVar.name, 'x');
+			assert.equal(xVar.value, '42');
+			assert.equal(xVar.variablesReference, 0);
+			assert.equal(msgVar.name, 'msg');
+			assert.equal(msgVar.value, 'hello');
+			assert.equal(msgVar.variablesReference, 0);
+			assert.equal(objVar.name, 'obj');
+			assert.equal(objVar.value, 'Object');
+			assert.ok(objVar.variablesReference > 0, 'object property must have non-zero variablesReference');
+		} finally {
+			await stopFakeServer(withProps);
+		}
+	});
+
+	it('stale variablesReference after continue returns empty variables without a CDP call', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		pauseWithScopes(state);
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+		const scopesResp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+		const localRef = scopesResp.body.scopes[0].variablesReference;
+
+		// Continue clears the handle map
+		session.handleMessage(makeRequest('continue', { threadId: 1 }));
+		await waitForMessage(messages, isResponse('continue'));
+
+		const prevCount = state.receivedRequests.length;
+
+		session.handleMessage(makeRequest('variables', { variablesReference: localRef }));
+		const varResp = await waitForMessage(messages, isResponse('variables')) as DebugProtocol.VariablesResponse;
+
+		assert.ok(varResp.success);
+		assert.equal(varResp.body.variables.length, 0);
+		assert.equal(state.receivedRequests.length, prevCount, 'no CDP call should be made for a stale handle');
+	});
+
+	it('evaluateRequest with frameId sends Debugger.evaluateOnCallFrame', async () => {
+		const withEval = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.evaluateOnCallFrame') {
+				ws.send(JSON.stringify({ id: req.id, result: { result: { type: 'number', value: 99, description: '99' } } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withEval.port, CLASSIC_FIXTURE);
+			serverSend(withEval, {
+				method: 'Debugger.paused',
+				params: {
+					callFrames: [ {
+						callFrameId: 'cf-eval',
+						functionName: 'fn',
+						location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+						url: '/utils.js',
+						scopeChain: [],
+					} ],
+					reason: 'other',
+					hitBreakpoints: [ 'bp-1' ],
+				},
+			});
+			await waitForMessage(messages, isEvent('stopped'));
+
+			session.handleMessage(makeRequest('evaluate', { expression: '1 + 1', frameId: 0, context: 'hover' }));
+			const evalResp = await waitForMessage(messages, isResponse('evaluate')) as DebugProtocol.EvaluateResponse;
+
+			assert.ok(evalResp.success);
+			assert.equal(evalResp.body.result, '99');
+			assert.equal(evalResp.body.variablesReference, 0);
+
+			const evalReq = await waitForCdpMethod(withEval, 'Debugger.evaluateOnCallFrame');
+			assert.equal(evalReq.params?.callFrameId, 'cf-eval');
+			assert.equal(evalReq.params?.expression, '1 + 1');
+		} finally {
+			await stopFakeServer(withEval);
+		}
+	});
+
+	it('evaluateRequest without frameId sends Runtime.evaluate', async () => {
+		const withEval = await startFakeServer((req, ws) => {
+			if (req.method === 'Runtime.evaluate') {
+				ws.send(JSON.stringify({ id: req.id, result: { result: { type: 'string', value: 'world' } } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withEval.port, CLASSIC_FIXTURE);
+
+			session.handleMessage(makeRequest('evaluate', { expression: 'greeting', context: 'repl' }));
+			const evalResp = await waitForMessage(messages, isResponse('evaluate')) as DebugProtocol.EvaluateResponse;
+
+			assert.ok(evalResp.success);
+			assert.equal(evalResp.body.result, 'world');
+			assert.equal(evalResp.body.variablesReference, 0);
+
+			const evalReq = await waitForCdpMethod(withEval, 'Runtime.evaluate');
+			assert.equal(evalReq.params?.expression, 'greeting');
+		} finally {
+			await stopFakeServer(withEval);
+		}
 	});
 });

@@ -6,11 +6,31 @@ export interface CDPLocation {
 	columnNumber: number; // 0-based
 }
 
+export interface CDPRemoteObject {
+	type: string;          // 'object' | 'function' | 'string' | 'number' | 'boolean' | 'undefined' | 'symbol' | 'bigint'
+	value?: unknown;       // present for primitives
+	description?: string;  // human-readable, e.g. "Object", "Array(3)"
+	objectId?: string;     // present for objects/functions — use for getProperties
+}
+
+export interface CDPScope {
+	type: string;          // 'local' | 'closure' | 'global' | 'block' | 'script' | ...
+	object: CDPRemoteObject;
+	name?: string;
+}
+
+export interface CDPPropertyDescriptor {
+	name: string;
+	value?: CDPRemoteObject;
+	enumerable: boolean;
+}
+
 export interface CDPCallFrame {
 	callFrameId: string;
 	functionName: string;
 	location: CDPLocation;
 	url: string;
+	scopeChain?: CDPScope[];
 }
 
 export interface CDPPausedParams {

@@ -1,13 +1,13 @@
 import * as path from 'path';
 import {
 	BreakpointEvent, ContinuedEvent, InitializedEvent, LoggingDebugSession, OutputEvent,
-	Source, StackFrame, StoppedEvent, TerminatedEvent, Thread,
+	Scope, Source, StackFrame, StoppedEvent, TerminatedEvent, Thread,
 } from '@vscode/debugadapter';
 import { DebugProtocol } from '@vscode/debugprotocol';
 import { CDPConnection } from './v8/cdpConnection';
 import {
-	CDPBreakpointResolvedParams, CDPCallFrame, CDPPausedParams,
-	CDPScriptParsedParams, CDPSetBreakpointByUrlResult,
+	CDPBreakpointResolvedParams, CDPCallFrame, CDPPausedParams, CDPPropertyDescriptor,
+	CDPRemoteObject, CDPScriptParsedParams, CDPSetBreakpointByUrlResult,
 } from './v8/types';
 import { GeneratedLocation } from './sourceMaps/types';
 import { SourceMapResolver } from './sourceMaps/sourceMapResolver';
@@ -53,6 +53,10 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 	// non-null while the VM is paused
 	private pausedCallFrames: CDPCallFrame[] | null = null;
 
+	// Per-pause handle map: variablesReference → CDP objectId. Cleared on every resume.
+	private readonly variableHandles = new Map<number, string>();
+	private nextVariableHandle = 1;
+
 	private nextBreakpointId = 1;
 
 	private logEvent(message: string): void {
@@ -63,9 +67,34 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		this.sendEvent(new OutputEvent(`titanium-next [${elapsed}]: ${message}\n`));
 	}
 
+	private clearPauseState(): void {
+		this.pausedCallFrames = null;
+		this.variableHandles.clear();
+		this.nextVariableHandle = 1;
+	}
+
+	private allocHandle(objectId: string): number {
+		const h = this.nextVariableHandle++;
+		this.variableHandles.set(h, objectId);
+		return h;
+	}
+
+	private remoteObjectToValue(remoteObj: CDPRemoteObject): { value: string; variablesReference: number } {
+		if (remoteObj.type === 'object' || remoteObj.type === 'function') {
+			const value = remoteObj.description ?? remoteObj.type;
+			const variablesReference = remoteObj.objectId ? this.allocHandle(remoteObj.objectId) : 0;
+			return { value, variablesReference };
+		}
+		const value = remoteObj.value !== undefined
+			? String(remoteObj.value)
+			: (remoteObj.description ?? 'undefined');
+		return { value, variablesReference: 0 };
+	}
+
 	override initializeRequest(response: DebugProtocol.InitializeResponse, _args: DebugProtocol.InitializeRequestArguments): void {
 		response.body = response.body ?? {};
 		response.body.supportsConfigurationDoneRequest = true;
+		response.body.supportsEvaluateForHovers = true;
 		this.sendResponse(response);
 	}
 
@@ -365,11 +394,106 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		this.sendResponse(response);
 	}
 
+	override scopesRequest(
+		response: DebugProtocol.ScopesResponse,
+		args: DebugProtocol.ScopesArguments,
+	): void {
+		const frame = this.pausedCallFrames?.[args.frameId];
+		if (!frame) {
+			response.body = { scopes: [] };
+			this.sendResponse(response);
+			return;
+		}
+
+		const scopes: DebugProtocol.Scope[] = (frame.scopeChain ?? []).map(cdpScope => {
+			const isGlobal = cdpScope.type === 'global';
+			const name = cdpScope.name ?? (cdpScope.type.charAt(0).toUpperCase() + cdpScope.type.slice(1));
+			const variablesReference = cdpScope.object.objectId
+				? this.allocHandle(cdpScope.object.objectId)
+				: 0;
+			return new Scope(name, variablesReference, isGlobal);
+		});
+
+		response.body = { scopes };
+		this.sendResponse(response);
+	}
+
+	override async variablesRequest(
+		response: DebugProtocol.VariablesResponse,
+		args: DebugProtocol.VariablesArguments,
+	): Promise<void> {
+		const objectId = this.variableHandles.get(args.variablesReference);
+		if (!objectId || !this.connection) {
+			response.body = { variables: [] };
+			this.sendResponse(response);
+			return;
+		}
+
+		try {
+			const result = await this.connection.send<{ result: CDPPropertyDescriptor[] }>(
+				'Runtime.getProperties',
+				{ objectId, ownProperties: true },
+			);
+			const variables: DebugProtocol.Variable[] = (result.result ?? [])
+				.filter(prop => prop.enumerable)
+				.map(prop => {
+					const { value, variablesReference } = prop.value
+						? this.remoteObjectToValue(prop.value)
+						: { value: 'undefined', variablesReference: 0 };
+					return { name: prop.name, value, variablesReference };
+				});
+			response.body = { variables };
+			this.sendResponse(response);
+		} catch (err) {
+			this.logEvent(`variablesRequest error: ${(err as Error).message}`);
+			response.body = { variables: [] };
+			this.sendResponse(response);
+		}
+	}
+
+	override async evaluateRequest(
+		response: DebugProtocol.EvaluateResponse,
+		args: DebugProtocol.EvaluateArguments,
+	): Promise<void> {
+		if (!this.connection) {
+			this.sendErrorResponse(response, 1020, 'Not connected');
+			return;
+		}
+
+		try {
+			let remoteObj: CDPRemoteObject;
+			if (args.frameId !== undefined) {
+				const frame = this.pausedCallFrames?.[args.frameId];
+				if (!frame) {
+					this.sendErrorResponse(response, 1021, 'Invalid frame');
+					return;
+				}
+				const cdpResult = await this.connection.send<{ result: CDPRemoteObject }>(
+					'Debugger.evaluateOnCallFrame',
+					{ callFrameId: frame.callFrameId, expression: args.expression },
+				);
+				remoteObj = cdpResult.result;
+			} else {
+				const cdpResult = await this.connection.send<{ result: CDPRemoteObject }>(
+					'Runtime.evaluate',
+					{ expression: args.expression },
+				);
+				remoteObj = cdpResult.result;
+			}
+
+			const { value, variablesReference } = this.remoteObjectToValue(remoteObj);
+			response.body = { result: value, variablesReference };
+			this.sendResponse(response);
+		} catch (err) {
+			this.sendErrorResponse(response, 1022, `Evaluation failed: ${(err as Error).message}`);
+		}
+	}
+
 	override continueRequest(
 		response: DebugProtocol.ContinueResponse,
 		_args: DebugProtocol.ContinueArguments,
 	): void {
-		this.pausedCallFrames = null;
+		this.clearPauseState();
 		this.connection?.send('Debugger.resume').catch(err =>
 			this.logEvent(`Debugger.resume error: ${(err as Error).message}`)
 		);
@@ -382,7 +506,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		response: DebugProtocol.NextResponse,
 		_args: DebugProtocol.NextArguments,
 	): void {
-		this.pausedCallFrames = null;
+		this.clearPauseState();
 		this.connection?.send('Debugger.stepOver').catch(err =>
 			this.logEvent(`Debugger.stepOver error: ${(err as Error).message}`)
 		);
@@ -394,7 +518,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		response: DebugProtocol.StepInResponse,
 		_args: DebugProtocol.StepInArguments,
 	): void {
-		this.pausedCallFrames = null;
+		this.clearPauseState();
 		this.connection?.send('Debugger.stepInto').catch(err =>
 			this.logEvent(`Debugger.stepInto error: ${(err as Error).message}`)
 		);
@@ -406,7 +530,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		response: DebugProtocol.StepOutResponse,
 		_args: DebugProtocol.StepOutArguments,
 	): void {
-		this.pausedCallFrames = null;
+		this.clearPauseState();
 		this.connection?.send('Debugger.stepOut').catch(err =>
 			this.logEvent(`Debugger.stepOut error: ${(err as Error).message}`)
 		);
