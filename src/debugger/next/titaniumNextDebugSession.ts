@@ -30,6 +30,8 @@ interface ActiveBreakpoint {
 	generatedLocation?: GeneratedLocation;
 	/** Set after the CDP setBreakpointByUrl response arrives. */
 	cdpBreakpointId?: string;
+	/** CDP condition string — either the DAP condition or a converted logMessage. Omitted when not set. */
+	cdpCondition?: string;
 }
 
 export class TitaniumNextDebugSession extends LoggingDebugSession {
@@ -52,12 +54,15 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 	// non-null while the VM is paused
 	private pausedCallFrames: CDPCallFrame[] | null = null;
+	private pausedExceptionData: CDPRemoteObject | null = null;
 
 	// Per-pause handle map: variablesReference → CDP objectId. Cleared on every resume.
 	private readonly variableHandles = new Map<number, string>();
 	private nextVariableHandle = 1;
 
 	private nextBreakpointId = 1;
+
+	private exceptionBreakMode: 'none' | 'uncaught' | 'all' = 'none';
 
 	private logEvent(message: string): void {
 		if (!this.trace) {
@@ -69,6 +74,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 	private clearPauseState(): void {
 		this.pausedCallFrames = null;
+		this.pausedExceptionData = null;
 		this.variableHandles.clear();
 		this.nextVariableHandle = 1;
 	}
@@ -77,6 +83,12 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		const h = this.nextVariableHandle++;
 		this.variableHandles.set(h, objectId);
 		return h;
+	}
+
+	private buildLogPointCondition(logMessage: string): string {
+		// eslint-disable-next-line no-template-curly-in-string
+		const interpolated = logMessage.replace(/\{([^}]*)\}/g, '${$1}');
+		return `(()=>{console.log(\`${interpolated}\`);return false})()`;
 	}
 
 	private remoteObjectToValue(remoteObj: CDPRemoteObject): { value: string; variablesReference: number } {
@@ -95,6 +107,13 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		response.body = response.body ?? {};
 		response.body.supportsConfigurationDoneRequest = true;
 		response.body.supportsEvaluateForHovers = true;
+		response.body.supportsConditionalBreakpoints = true;
+		response.body.supportsLogPoints = true;
+		response.body.supportsExceptionInfoRequest = true;
+		response.body.exceptionBreakpointFilters = [
+			{ filter: 'all', label: 'Caught Exceptions' },
+			{ filter: 'uncaught', label: 'Uncaught Exceptions' },
+		];
 		this.sendResponse(response);
 	}
 
@@ -159,6 +178,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 				}
 
 				this.pausedCallFrames = params.callFrames;
+				this.pausedExceptionData = params.reason === 'exception' ? (params.data ?? null) : null;
 				const reason = params.reason === 'exception'
 					? 'exception'
 					: params.hitBreakpoints?.length ? 'breakpoint' : 'step';
@@ -237,10 +257,17 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 				: [];
 			const loc = generated[0];
 			this.logEvent(`  bp#${dapId} line=${reqBp.line} → ${loc ? `${loc.url}:${loc.line}:${loc.column}` : 'unresolved (no source map match)'}`);
+			let cdpCondition: string | undefined;
+			if (reqBp.condition) {
+				cdpCondition = reqBp.condition;
+			} else if (reqBp.logMessage) {
+				cdpCondition = this.buildLogPointCondition(reqBp.logMessage);
+			}
 			return {
 				dapId,
 				requestedLine: reqBp.line,
 				generatedLocation: loc,
+				cdpCondition,
 			};
 		});
 
@@ -291,7 +318,7 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 				continue;
 			}
 			const { url, line, column } = active.generatedLocation;
-			const locationKey = `${url}:${line}:${column}`;
+			const locationKey = `${url}:${line}:${column}:${active.cdpCondition ?? ''}`;
 
 			const existing = locationSet.get(locationKey);
 			if (existing) {
@@ -303,11 +330,15 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 			try {
 				// CDP uses 0-based line numbers; source-map returns 1-based → subtract 1.
-				const result = await connection.send<CDPSetBreakpointByUrlResult>('Debugger.setBreakpointByUrl', {
+				const cdpParams: Record<string, unknown> = {
 					url,
 					lineNumber: line - 1,
 					columnNumber: column,
-				});
+				};
+				if (active.cdpCondition) {
+					cdpParams.condition = active.cdpCondition;
+				}
+				const result = await connection.send<CDPSetBreakpointByUrlResult>('Debugger.setBreakpointByUrl', cdpParams);
 				active.cdpBreakpointId = result.breakpointId;
 				const verified = result.locations.length > 0;
 				let resolvedLine = active.requestedLine;
@@ -487,6 +518,45 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		} catch (err) {
 			this.sendErrorResponse(response, 1022, `Evaluation failed: ${(err as Error).message}`);
 		}
+	}
+
+	override setExceptionBreakPointsRequest(
+		response: DebugProtocol.SetExceptionBreakpointsResponse,
+		args: DebugProtocol.SetExceptionBreakpointsArguments,
+	): void {
+		const filters = args.filters ?? [];
+		let mode: 'none' | 'uncaught' | 'all' = 'none';
+		if (filters.includes('all')) {
+			mode = 'all';
+		} else if (filters.includes('uncaught')) {
+			mode = 'uncaught';
+		}
+		this.exceptionBreakMode = mode;
+		this.connection?.send('Debugger.setPauseOnExceptions', { state: mode }).catch(err =>
+			this.logEvent(`setPauseOnExceptions error: ${(err as Error).message}`)
+		);
+		this.sendResponse(response);
+	}
+
+	override exceptionInfoRequest(
+		response: DebugProtocol.ExceptionInfoResponse,
+		_args: DebugProtocol.ExceptionInfoArguments,
+	): void {
+		const data = this.pausedExceptionData;
+		if (!data) {
+			this.sendErrorResponse(response, 1030, 'Not paused on exception');
+			return;
+		}
+		const description = data.description ?? (data.value !== undefined ? String(data.value) : undefined);
+		const variablesReference = data.objectId ? this.allocHandle(data.objectId) : 0;
+		const breakMode: DebugProtocol.ExceptionBreakMode = this.exceptionBreakMode === 'all' ? 'always' : 'unhandled';
+		response.body = {
+			exceptionId: data.description?.match(/^[^:]+/)?.[0] ?? data.type,
+			description,
+			breakMode,
+		};
+		(response.body as unknown as Record<string, unknown>).variablesReference = variablesReference;
+		this.sendResponse(response);
 	}
 
 	override continueRequest(

@@ -1048,3 +1048,285 @@ describe('TitaniumNextDebugSession / scopes and variables', () => {
 		}
 	});
 });
+
+describe('TitaniumNextDebugSession / capabilities', () => {
+	function initSession(): { session: TitaniumNextDebugSession; messages: DebugProtocol.ProtocolMessage[] } {
+		const session = new TitaniumNextDebugSession();
+		const messages: DebugProtocol.ProtocolMessage[] = [];
+		session.onDidSendMessage(m => messages.push(m as DebugProtocol.ProtocolMessage));
+		session.handleMessage(makeRequest('initialize', { adapterID: 'titanium-next', pathFormat: 'path' }));
+		return { session, messages };
+	}
+
+	it('reports supportsConditionalBreakpoints in initialize response', async () => {
+		const { messages } = initSession();
+		const resp = await waitForMessage(messages, isResponse('initialize')) as DebugProtocol.InitializeResponse;
+		assert.equal(resp.body?.supportsConditionalBreakpoints, true);
+	});
+
+	it('reports supportsLogPoints in initialize response', async () => {
+		const { messages } = initSession();
+		const resp = await waitForMessage(messages, isResponse('initialize')) as DebugProtocol.InitializeResponse;
+		assert.equal(resp.body?.supportsLogPoints, true);
+	});
+
+	it('reports supportsExceptionInfoRequest in initialize response', async () => {
+		const { messages } = initSession();
+		const resp = await waitForMessage(messages, isResponse('initialize')) as DebugProtocol.InitializeResponse;
+		assert.equal(resp.body?.supportsExceptionInfoRequest, true);
+	});
+
+	it('includes exceptionBreakpointFilters with "all" and "uncaught" entries', async () => {
+		const { messages } = initSession();
+		const resp = await waitForMessage(messages, isResponse('initialize')) as DebugProtocol.InitializeResponse;
+		const filters = resp.body?.exceptionBreakpointFilters ?? [];
+		assert.equal(filters.length, 2);
+		assert.ok(filters.some(f => f.filter === 'all'), 'should have "all" filter');
+		assert.ok(filters.some(f => f.filter === 'uncaught'), 'should have "uncaught" filter');
+	});
+});
+
+describe('TitaniumNextDebugSession / conditional breakpoints', () => {
+	let state: ServerState;
+
+	beforeEach(async () => {
+		state = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.setBreakpointByUrl') {
+				ws.send(JSON.stringify({ id: req.id, result: { breakpointId: `bp-${req.id}`, locations: [] } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+	});
+
+	afterEach(async () => {
+		await stopFakeServer(state);
+	});
+
+	it('passes condition to CDP setBreakpointByUrl when breakpoint has a condition', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+		session.handleMessage(makeRequest('setBreakpoints', {
+			source: { path: sourcePath },
+			breakpoints: [ { line: 1, condition: 'x > 5' } ],
+		}));
+
+		await waitForMessage(messages, isResponse('setBreakpoints'));
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
+		assert.equal((cdpReq.params as unknown as CDPSetBreakpointByUrlParams).condition, 'x > 5');
+	});
+
+	it('omits condition from CDP when breakpoint condition is empty string', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+		session.handleMessage(makeRequest('setBreakpoints', {
+			source: { path: sourcePath },
+			breakpoints: [ { line: 1, condition: '' } ],
+		}));
+
+		await waitForMessage(messages, isResponse('setBreakpoints'));
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
+		assert.equal((cdpReq.params as unknown as CDPSetBreakpointByUrlParams).condition, undefined);
+	});
+
+	it('omits condition from CDP when breakpoint has no condition', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+		session.handleMessage(makeRequest('setBreakpoints', {
+			source: { path: sourcePath },
+			breakpoints: [ { line: 1 } ],
+		}));
+
+		await waitForMessage(messages, isResponse('setBreakpoints'));
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
+		assert.equal((cdpReq.params as unknown as CDPSetBreakpointByUrlParams).condition, undefined);
+	});
+});
+
+describe('TitaniumNextDebugSession / log points', () => {
+	let state: ServerState;
+
+	beforeEach(async () => {
+		state = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.setBreakpointByUrl') {
+				ws.send(JSON.stringify({ id: req.id, result: { breakpointId: `bp-${req.id}`, locations: [] } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+	});
+
+	afterEach(async () => {
+		await stopFakeServer(state);
+	});
+
+	it('converts logMessage to a CDP condition that returns false (no pause)', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+		session.handleMessage(makeRequest('setBreakpoints', {
+			source: { path: sourcePath },
+			breakpoints: [ { line: 1, logMessage: 'Hello world' } ],
+		}));
+
+		await waitForMessage(messages, isResponse('setBreakpoints'));
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
+		const condition = (cdpReq.params as unknown as CDPSetBreakpointByUrlParams).condition ?? '';
+		assert.ok(condition.includes('console.log'), 'condition should call console.log');
+		assert.ok(condition.includes('Hello world'), 'condition should include the log message text');
+		assert.ok(condition.includes('false'), 'condition should evaluate to false so execution does not pause');
+	});
+
+	it('interpolates {expr} placeholders in logMessage as JS template expressions', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+		session.handleMessage(makeRequest('setBreakpoints', {
+			source: { path: sourcePath },
+			breakpoints: [ { line: 1, logMessage: 'Value is {x + 1} and {y}' } ],
+		}));
+
+		await waitForMessage(messages, isResponse('setBreakpoints'));
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
+		const condition = (cdpReq.params as unknown as CDPSetBreakpointByUrlParams).condition ?? '';
+		// eslint-disable-next-line no-template-curly-in-string
+		assert.ok(condition.includes('${x + 1}'), 'should interpolate first placeholder');
+		// eslint-disable-next-line no-template-curly-in-string
+		assert.ok(condition.includes('${y}'), 'should interpolate second placeholder');
+	});
+});
+
+describe('TitaniumNextDebugSession / exception breakpoints', () => {
+	let state: ServerState;
+
+	beforeEach(async () => {
+		state = await startFakeServer();
+	});
+
+	afterEach(async () => {
+		await stopFakeServer(state);
+	});
+
+	it('sends Debugger.setPauseOnExceptions with mode "none" when no filters', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('setExceptionBreakpoints', { filters: [] }));
+		await waitForMessage(messages, isResponse('setExceptionBreakpoints'));
+
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setPauseOnExceptions');
+		assert.equal(cdpReq.params?.state, 'none');
+	});
+
+	it('sends Debugger.setPauseOnExceptions with mode "all" for "all" filter', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('setExceptionBreakpoints', { filters: [ 'all' ] }));
+		await waitForMessage(messages, isResponse('setExceptionBreakpoints'));
+
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setPauseOnExceptions');
+		assert.equal(cdpReq.params?.state, 'all');
+	});
+
+	it('sends Debugger.setPauseOnExceptions with mode "uncaught" for "uncaught" filter', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('setExceptionBreakpoints', { filters: [ 'uncaught' ] }));
+		await waitForMessage(messages, isResponse('setExceptionBreakpoints'));
+
+		const cdpReq = await waitForCdpMethod(state, 'Debugger.setPauseOnExceptions');
+		assert.equal(cdpReq.params?.state, 'uncaught');
+	});
+
+	it('emits StoppedEvent with reason "exception" when V8 pauses with reason exception', async () => {
+		const { messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		await waitForCdpMethod(state, 'Debugger.enable');
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: '',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'exception',
+				data: { type: 'object', description: 'Error: something went wrong', objectId: 'err-obj-1' },
+			},
+		});
+
+		const stopped = await waitForMessage(messages, isEvent('stopped')) as DebugProtocol.StoppedEvent;
+		assert.equal(stopped.body.reason, 'exception');
+		assert.equal(stopped.body.threadId, 1);
+	});
+
+	it('exceptionInfoRequest returns exceptionId and description when paused on exception', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		await waitForCdpMethod(state, 'Debugger.enable');
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: '',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'exception',
+				data: { type: 'object', description: 'Error: something went wrong', objectId: 'err-obj-1' },
+			},
+		});
+
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('exceptionInfo', { threadId: 1 }));
+		const resp = await waitForMessage(messages, isResponse('exceptionInfo')) as DebugProtocol.ExceptionInfoResponse;
+
+		assert.ok(resp.success);
+		assert.equal(resp.body.exceptionId, 'Error');
+		assert.equal(resp.body.description, 'Error: something went wrong');
+	});
+
+	it('exceptionInfoRequest allocates a variablesReference for an exception with objectId', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		await waitForCdpMethod(state, 'Debugger.enable');
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: '',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'exception',
+				data: { type: 'object', description: 'Error: oops', objectId: 'err-obj-2' },
+			},
+		});
+
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('exceptionInfo', { threadId: 1 }));
+		const infoResp = await waitForMessage(messages, isResponse('exceptionInfo')) as DebugProtocol.ExceptionInfoResponse;
+		assert.ok(infoResp.success);
+
+		// The variablesReference should be exposed so the exception object can be expanded.
+		// It is surfaced via details.evaluateName absence + a handle stored in variablesReference.
+		const body = infoResp.body as DebugProtocol.ExceptionInfoResponse['body'] & { variablesReference?: number };
+		assert.ok((body.variablesReference ?? 0) > 0, 'variablesReference should be non-zero for an exception with an objectId');
+	});
+
+	it('exceptionInfoRequest returns error response when not paused on exception', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('exceptionInfo', { threadId: 1 }));
+		const resp = await waitForMessage(messages, isResponse('exceptionInfo')) as DebugProtocol.Response;
+
+		assert.equal(resp.success, false);
+	});
+});

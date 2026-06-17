@@ -37,6 +37,8 @@ export interface CDPPausedParams {
 	callFrames: CDPCallFrame[];
 	reason: string;
 	hitBreakpoints?: string[];
+	/** Present when reason is "exception" — the thrown value. */
+	data?: CDPRemoteObject;
 }
 
 export interface CDPScriptParsedParams {
