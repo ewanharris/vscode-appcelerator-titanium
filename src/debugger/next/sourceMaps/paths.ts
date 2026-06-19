@@ -6,6 +6,13 @@ export function rebaseSourcePath(rawSource: string, sourceRoot: string | undefin
 	const combined = sourceRoot && sourceRoot.length > 0
 		? path.posix.join(sourceRoot, rawSource)
 		: rawSource;
+	// An absolute combined path that isn't rooted inside the project is an SDK-internal
+	// file (e.g. ti.main.js whose sourceRoot points into the mobilesdk directory).
+	// Rebase would extract a tail like "Resources/android/ti.main.js" and incorrectly
+	// resolve it into the user's project — bail out early instead.
+	if (path.posix.isAbsolute(combined) && !combined.startsWith(projectRoot)) {
+		return null;
+	}
 	const match = SEGMENT_RE.exec(combined);
 	if (!match) {
 		return null;

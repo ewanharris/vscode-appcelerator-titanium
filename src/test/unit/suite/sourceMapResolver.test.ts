@@ -33,7 +33,19 @@ describe('SourceMapResolver / classic', () => {
 
 	it('lists deployed scripts as /-rooted V8 URLs', () => {
 		const urls = resolver.listScripts().map(s => s.v8url).sort();
-		assert.deepEqual(urls, [ '/app.js', '/lib/helper.js', '/utils.js' ]);
+		assert.deepEqual(urls, [ '/app.js', '/lib/helper.js', '/ti.main.js', '/utils.js' ]);
+	});
+
+	it('excludes SDK-internal sources from userSources when sourceRoot is outside the project', () => {
+		const script = resolver.listScripts().find(s => s.v8url === '/ti.main.js');
+		assert.ok(script, '/ti.main.js must appear (it has an inline source map)');
+		assert.deepEqual(script.userSources, [],
+			'sourceRoot pointing into the SDK install dir must not produce userSources');
+	});
+
+	it('isKnownScript returns false for SDK bootstrap scripts in classic projects', () => {
+		assert.equal(resolver.isKnownScript('/ti.main.js'), false,
+			'ti.main.js with an SDK-internal sourceRoot must not be treated as a user script');
 	});
 
 	it('exposes the deployed file path for each script', () => {
