@@ -205,7 +205,7 @@ export class SourceMapResolver {
 		if (this.projectType === 'alloy') {
 			return absPath.startsWith(path.join(this.projectRoot, 'app') + path.sep);
 		}
-		return true;
+		return absPath.startsWith(path.join(this.projectRoot, 'Resources') + path.sep);
 	}
 
 	private buildScript(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry | undefined): ResolvedScript {
