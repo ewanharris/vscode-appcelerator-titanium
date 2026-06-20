@@ -145,7 +145,11 @@ export class SourceMapResolver {
 				continue;
 			}
 			if (script.strategy === 'simple') {
-				const pos = script.inline.consumer.generatedPositionFor({ source: key, line, column });
+				// LEAST_UPPER_BOUND finds the first mapped segment at or after the requested
+				// column on the target source line. GREATEST_LOWER_BOUND (the default) can
+				// walk back to the previous line when column 0 has no mapping (e.g. a tab
+				// before the first token), producing an off-by-one generated line.
+				const pos = script.inline.consumer.generatedPositionFor({ source: key, line, column, bias: SourceMapConsumer.LEAST_UPPER_BOUND });
 				if (pos.line === null) {
 					continue;
 				}
@@ -153,7 +157,7 @@ export class SourceMapResolver {
 				continue;
 			}
 			const alloy = script.alloy as MapEntry;
-			const intermediatePos = alloy.consumer.generatedPositionFor({ source: key, line, column });
+			const intermediatePos = alloy.consumer.generatedPositionFor({ source: key, line, column, bias: SourceMapConsumer.LEAST_UPPER_BOUND });
 			if (intermediatePos.line === null) {
 				continue;
 			}
@@ -162,6 +166,7 @@ export class SourceMapResolver {
 				source: inlineKey,
 				line: intermediatePos.line,
 				column: intermediatePos.column ?? 0,
+				bias: SourceMapConsumer.LEAST_UPPER_BOUND,
 			});
 			if (genPos.line === null) {
 				continue;

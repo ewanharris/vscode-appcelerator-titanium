@@ -98,6 +98,16 @@ describe('SourceMapResolver / classic', () => {
 		assert.equal(generated[0].url, '/utils.js');
 	});
 
+	it('maps an indented source line (column 0) to the correct generated line', () => {
+		// Source line 2 is tab-indented; the first mapped column in the source map is > 0.
+		// GREATEST_LOWER_BOUND bias walks back to line 1 in that case, producing the wrong
+		// generated line. LEAST_UPPER_BOUND must be used to get line 2.
+		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+		const generated = resolver.sourceToGenerated(sourcePath, 2, 0);
+		assert.ok(generated.length > 0, 'expected a GeneratedLocation for line 2');
+		assert.equal(generated[0].line, 2, 'generated line must be 2, not 1 (off-by-one from wrong bias)');
+	});
+
 	it('returns empty array for a source path the resolver does not know', () => {
 		const generated = resolver.sourceToGenerated('/totally/unknown/path.js', 1, 0);
 		assert.deepEqual(generated, []);
