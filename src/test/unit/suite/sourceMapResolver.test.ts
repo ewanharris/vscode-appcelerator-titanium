@@ -19,6 +19,18 @@ describe('detectProjectType', () => {
 	});
 });
 
+describe('SourceMapResolver / lifecycle', () => {
+	it('throws if init() is called a second time without dispose()', async () => {
+		const resolver = new SourceMapResolver();
+		await resolver.init(CLASSIC_FIXTURE, 'android');
+		await assert.rejects(
+			() => resolver.init(CLASSIC_FIXTURE, 'android'),
+			/called twice/,
+		);
+		resolver.dispose();
+	});
+});
+
 describe('SourceMapResolver / classic', () => {
 	let resolver: SourceMapResolver;
 
@@ -197,6 +209,21 @@ describe('SourceMapResolver / alloy', () => {
 			assert.ok(!src.includes('Alloy/template'),
 				`/app.js leaked framework template path: ${src}`);
 		}
+	});
+
+	it('maps alloy.js source to /app.js via chain strategy sourceToGenerated', () => {
+		// The inline map covers generated lines 6-15 and 33-40. Lines 6-15 map through
+		// the sidecar to template/app.js (boilerplate), not user code. Generated line 33
+		// maps through the inline map to intermediate line 22, which the sidecar maps to
+		// app/alloy.js line 5 — the first user-source entry in the chain.
+		const appJsLoc = resolver.generatedToSource('/app.js', 33, 0);
+		assert.ok(appJsLoc, '/app.js line 33 must resolve to a source via the chain strategy');
+		assert.ok(appJsLoc.source.endsWith(path.join('app', 'alloy.js')),
+			`expected alloy.js as chain source; got ${appJsLoc.source}`);
+
+		const generated = resolver.sourceToGenerated(appJsLoc.source, appJsLoc.line, appJsLoc.column);
+		assert.ok(generated.length > 0, 'chain sourceToGenerated must return at least one location');
+		assert.equal(generated[0].url, '/app.js', 'must map back to /app.js via chain');
 	});
 
 	it('round-trips a user source line through the two-stage chain', () => {

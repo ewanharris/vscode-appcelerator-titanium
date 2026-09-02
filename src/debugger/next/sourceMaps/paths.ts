@@ -10,7 +10,11 @@ export function rebaseSourcePath(rawSource: string, sourceRoot: string | undefin
 	// file (e.g. ti.main.js whose sourceRoot points into the mobilesdk directory).
 	// Rebase would extract a tail like "Resources/android/ti.main.js" and incorrectly
 	// resolve it into the user's project — bail out early instead.
-	if (path.posix.isAbsolute(combined) && !combined.startsWith(projectRoot)) {
+	// Normalise projectRoot to posix separators for the comparison (combined is always
+	// posix because path.posix.join was used above), and add a trailing slash so that
+	// a root of "/foo" does not incorrectly prefix-match "/foobar".
+	const projectRootPosix = projectRoot.split(path.sep).join('/');
+	if (path.posix.isAbsolute(combined) && !combined.startsWith(projectRootPosix + '/')) {
 		return null;
 	}
 	const match = SEGMENT_RE.exec(combined);

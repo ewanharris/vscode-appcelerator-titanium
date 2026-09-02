@@ -202,6 +202,15 @@ describe('TitaniumNextDebugSession / attach', () => {
 		const resp = await waitForMessage(messages, isResponse('attach')) as DebugProtocol.Response;
 		assert.equal(resp.success, false);
 	});
+
+	it('returns an error response for launchRequest', async () => {
+		const session = new TitaniumNextDebugSession();
+		const messages: DebugProtocol.ProtocolMessage[] = [];
+		session.onDidSendMessage(m => messages.push(m as DebugProtocol.ProtocolMessage));
+		session.handleMessage(makeRequest('launch', {}));
+		const resp = await waitForMessage(messages, isResponse('launch')) as DebugProtocol.Response;
+		assert.equal(resp.success, false);
+	});
 });
 
 describe('TitaniumNextDebugSession / configurationDone', () => {
@@ -339,33 +348,6 @@ describe('TitaniumNextDebugSession / setBreakpoints (classic)', () => {
 	});
 
 	it('emits verified BreakpointEvent on Debugger.breakpointResolved', async () => {
-		// Set a breakpoint; server returns empty locations (script not loaded yet)
-		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
-		const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
-
-		session.handleMessage(makeRequest('setBreakpoints', {
-			source: { path: sourcePath },
-			breakpoints: [ { line: 1 } ],
-		}));
-
-		await waitForMessage(messages, isResponse('setBreakpoints'));
-		// Wait for the setBreakpointByUrl CDP call and get its breakpointId from the response
-		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
-		assert.ok(cdpReq);
-
-		// Now the server fires breakpointResolved (script loaded, breakpoint snapped)
-		serverSend(state, {
-			method: 'Debugger.breakpointResolved',
-			params: {
-				breakpointId: cdpReq.id.toString(), // our fake server echoes back the request id as result.breakpointId
-				location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
-			},
-		});
-
-		// We need the cdpBreakpointId to have been stored on the active bp first.
-		// The fake server responded with {} so breakpointId is undefined — simulate
-		// a proper response by directly firing the event with the known id.
-		// Instead, use a server that returns a real breakpointId:
 		const withBpId = await startFakeServer((req, ws) => {
 			if (req.method === 'Debugger.setBreakpointByUrl') {
 				ws.send(JSON.stringify({ id: req.id, result: { breakpointId: 'cdp-bp-1', locations: [] } }));
@@ -375,19 +357,21 @@ describe('TitaniumNextDebugSession / setBreakpoints (classic)', () => {
 		});
 
 		try {
-			const { session: sess2, messages: msgs2 } = await attachSession(withBpId.port, CLASSIC_FIXTURE);
-			sess2.handleMessage(makeRequest('setBreakpoints', {
+			const { session, messages } = await attachSession(withBpId.port, CLASSIC_FIXTURE);
+			const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+			session.handleMessage(makeRequest('setBreakpoints', {
 				source: { path: sourcePath },
 				breakpoints: [ { line: 1 } ],
 			}));
 
-			await waitForMessage(msgs2, isResponse('setBreakpoints'));
-			// Wait for the initial unresolved BreakpointEvent
-			await waitForMessage(msgs2, m =>
+			await waitForMessage(messages, isResponse('setBreakpoints'));
+			// Wait for the initial unverified BreakpointEvent from the setBreakpointByUrl response
+			await waitForMessage(messages, m =>
 				m.type === 'event' && (m as DebugProtocol.Event).event === 'breakpoint'
 			);
 
-			// Server fires breakpointResolved for the same id
+			// Server fires breakpointResolved — the script has been loaded and the BP snapped
 			serverSend(withBpId, {
 				method: 'Debugger.breakpointResolved',
 				params: {
@@ -396,7 +380,7 @@ describe('TitaniumNextDebugSession / setBreakpoints (classic)', () => {
 				},
 			});
 
-			const resolved = await waitForMessage(msgs2, m => {
+			const resolved = await waitForMessage(messages, m => {
 				if (m.type !== 'event' || (m as DebugProtocol.Event).event !== 'breakpoint') {
 					return false;
 				}
@@ -443,7 +427,6 @@ describe('TitaniumNextDebugSession / setBreakpoints (classic)', () => {
 	it('does not produce "already exists" when setBreakpoints is called twice rapidly', async () => {
 		// Both rounds are fired before CDP responses arrive. The serial queue must
 		// ensure round-2 removes happen before round-2 sets.
-		const errors: string[] = [];
 		const withBpId = await startFakeServer((req, ws) => {
 			if (req.method === 'Debugger.setBreakpointByUrl') {
 				ws.send(JSON.stringify({ id: req.id, result: { breakpointId: `bp-${req.id}`, locations: [] } }));
@@ -473,13 +456,79 @@ describe('TitaniumNextDebugSession / setBreakpoints (classic)', () => {
 			// Wait for both CDP rounds to complete
 			await new Promise(r => setTimeout(r, 200));
 
-			assert.equal(errors.length, 0, `unexpected errors: ${errors.join(', ')}`);
 			// Only one setBreakpointByUrl should be active (not two for same location)
 			const setBpCalls = withBpId.receivedRequests.filter(r => r.method === 'Debugger.setBreakpointByUrl');
 			const removeCalls = withBpId.receivedRequests.filter(r => r.method === 'Debugger.removeBreakpoint');
 			// Round 2 must have removed round 1's bp before setting a new one
 			assert.ok(setBpCalls.length >= 2, 'expected at least 2 setBreakpointByUrl calls (one per round)');
 			assert.ok(removeCalls.length >= 1, 'expected at least 1 removeBreakpoint call (round-2 cleanup)');
+		} finally {
+			await stopFakeServer(withBpId);
+		}
+	});
+
+	it('prunes the breakpointOps map entry after the op settles', async () => {
+		const st = await startFakeServer((req, ws) => {
+			ws.send(JSON.stringify({ id: req.id, result: req.method === 'Debugger.setBreakpointByUrl'
+				? { breakpointId: `bp-${req.id}`, locations: [] }
+				: {} }));
+		});
+
+		try {
+			const { session, messages } = await attachSession(st.port, CLASSIC_FIXTURE);
+			const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+			session.handleMessage(makeRequest('setBreakpoints', {
+				source: { path: sourcePath },
+				breakpoints: [ { line: 1 } ],
+			}, 1));
+			await waitForMessage(messages, isResponse('setBreakpoints'));
+			await waitForCdpMethod(st, 'Debugger.setBreakpointByUrl');
+			// Give the .finally() pruning microtask a tick to run.
+			await new Promise(r => setTimeout(r, 50));
+
+			const ops = (session as unknown as Record<string, Map<string, unknown>>).breakpointOps;
+			assert.equal(ops.size, 0, 'breakpointOps must be empty after the op settles');
+		} finally {
+			await stopFakeServer(st);
+		}
+	});
+
+	it('sends Debugger.removeBreakpoint for all active BPs when cleared with an empty array', async () => {
+		const withBpId = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.setBreakpointByUrl') {
+				ws.send(JSON.stringify({ id: req.id, result: { breakpointId: 'bp-to-remove', locations: [] } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withBpId.port, CLASSIC_FIXTURE);
+			const sourcePath = path.join(CLASSIC_FIXTURE, 'Resources', 'android', 'utils.js');
+
+			// Set a breakpoint and wait for CDP to process it so cdpBreakpointId is stored
+			session.handleMessage(makeRequest('setBreakpoints', {
+				source: { path: sourcePath },
+				breakpoints: [ { line: 1 } ],
+			}, 1));
+			await waitForMessage(messages, m => isResponse('setBreakpoints')(m) && (m as DebugProtocol.Response).request_seq === 1);
+			await waitForCdpMethod(withBpId, 'Debugger.setBreakpointByUrl');
+			await new Promise(r => setTimeout(r, 50));
+
+			// Clear all breakpoints for this source
+			session.handleMessage(makeRequest('setBreakpoints', {
+				source: { path: sourcePath },
+				breakpoints: [],
+			}, 2));
+			await waitForMessage(messages, m => isResponse('setBreakpoints')(m) && (m as DebugProtocol.Response).request_seq === 2);
+			await waitForCdpMethod(withBpId, 'Debugger.removeBreakpoint');
+
+			const removeCalls = withBpId.receivedRequests.filter(r => r.method === 'Debugger.removeBreakpoint');
+			assert.equal(removeCalls.length, 1);
+			assert.equal(removeCalls[0].params?.breakpointId, 'bp-to-remove');
+			const setBpCallsAfterClear = withBpId.receivedRequests.filter(r => r.method === 'Debugger.setBreakpointByUrl');
+			assert.equal(setBpCallsAfterClear.length, 1, 'no new setBreakpointByUrl after clearing');
 		} finally {
 			await stopFakeServer(withBpId);
 		}
@@ -520,7 +569,7 @@ describe('TitaniumNextDebugSession / pause and resume', () => {
 		assert.equal(stopped.body.threadId, 1);
 	});
 
-	it('emits StoppedEvent with reason "step" when hitBreakpoints is absent', async () => {
+	it('maps an unknown CDP pause reason to DAP "step" when hitBreakpoints is absent', async () => {
 		const { messages } = await attachSession(state.port, CLASSIC_FIXTURE);
 		await waitForCdpMethod(state, 'Debugger.enable');
 
@@ -769,6 +818,40 @@ describe('TitaniumNextDebugSession / stackTrace', () => {
 		assert.ok(!messages.some(isEvent('stopped')), 'StoppedEvent must not be emitted for SDK-internal pause');
 	});
 
+	it('returns correct frames and totalFrames for a multi-frame stack', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		serverSend(state, {
+			method: 'Debugger.scriptParsed',
+			params: { scriptId: 'script-utils', url: '/utils.js' },
+		});
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [
+					{ callFrameId: 'cf-0', functionName: 'inner', location: { scriptId: 'script-utils', lineNumber: 0, columnNumber: 0 }, url: '/utils.js' },
+					{ callFrameId: 'cf-1', functionName: 'outer', location: { scriptId: 'script-utils', lineNumber: 1, columnNumber: 0 }, url: '/utils.js' },
+					{ callFrameId: 'cf-2', functionName: '(anonymous)', location: { scriptId: 'script-utils', lineNumber: 2, columnNumber: 0 }, url: '/utils.js' },
+				],
+				reason: 'breakpoint',
+				hitBreakpoints: [ 'bp-1' ],
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		// Request only the first two frames
+		session.handleMessage(makeRequest('stackTrace', { threadId: 1, startFrame: 0, levels: 2 }));
+		const resp = await waitForMessage(messages, isResponse('stackTrace')) as DebugProtocol.StackTraceResponse;
+		assert.ok(resp.success);
+		assert.equal(resp.body.stackFrames.length, 2);
+		assert.equal(resp.body.totalFrames, 3, 'totalFrames must reflect the full stack');
+		assert.equal(resp.body.stackFrames[0].id, 0);
+		assert.equal(resp.body.stackFrames[0].name, 'inner');
+		assert.equal(resp.body.stackFrames[1].id, 1);
+		assert.equal(resp.body.stackFrames[1].name, 'outer');
+	});
+
 	it('auto-resumes when paused in a truly internal script not in build assets', async () => {
 		const { messages } = await attachSession(state.port, CLASSIC_FIXTURE);
 
@@ -801,7 +884,7 @@ describe('TitaniumNextDebugSession / alloy fixture', () => {
 		await stopFakeServer(state);
 	});
 
-	it('sets breakpoint by URL for an alloy controller source', async () => {
+	it('sets breakpoint by URL and line number for an alloy controller source', async () => {
 		const { session, messages } = await attachSession(state.port, ALLOY_FIXTURE);
 		const sourcePath = path.join(ALLOY_FIXTURE, 'app', 'controllers', 'android', 'index.js');
 
@@ -812,7 +895,12 @@ describe('TitaniumNextDebugSession / alloy fixture', () => {
 
 		await waitForMessage(messages, isResponse('setBreakpoints'));
 		const cdpReq = await waitForCdpMethod(state, 'Debugger.setBreakpointByUrl');
-		assert.equal((cdpReq.params as unknown as CDPSetBreakpointByUrlParams).url, '/alloy/controllers/index.js');
+		const params = cdpReq.params as unknown as CDPSetBreakpointByUrlParams;
+		assert.equal(params.url, '/alloy/controllers/index.js');
+		// The alloy generated file has a header before controller code, so line 1 of
+		// the user source maps to a generated line > 0 (not the start of the file).
+		assert.ok(typeof params.lineNumber === 'number' && params.lineNumber > 0,
+			`lineNumber should be a positive number reflecting source map translation; got ${params.lineNumber}`);
 	});
 });
 
@@ -980,6 +1068,76 @@ describe('TitaniumNextDebugSession / scopes and variables', () => {
 		assert.equal(state.receivedRequests.length, prevCount, 'no CDP call should be made for a stale handle');
 	});
 
+	it('expands a nested object via a child variablesRequest', async () => {
+		const withNested = await startFakeServer((req, ws) => {
+			if (req.method === 'Runtime.getProperties') {
+				const objectId = req.params?.objectId as string | undefined;
+				if (objectId === 'local-obj') {
+					ws.send(JSON.stringify({ id: req.id, result: { result: [
+						{ name: 'child', value: { type: 'object', objectId: 'child-obj', description: 'Object' }, enumerable: true },
+					] } }));
+				} else if (objectId === 'child-obj') {
+					ws.send(JSON.stringify({ id: req.id, result: { result: [
+						{ name: 'value', value: { type: 'number', value: 7, description: '7' }, enumerable: true },
+					] } }));
+				} else {
+					ws.send(JSON.stringify({ id: req.id, result: { result: [] } }));
+				}
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withNested.port, CLASSIC_FIXTURE);
+			serverSend(withNested, {
+				method: 'Debugger.paused',
+				params: {
+					callFrames: [ {
+						callFrameId: 'cf-1',
+						functionName: 'fn',
+						location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+						url: '/utils.js',
+						scopeChain: [
+							{ type: 'local', object: { type: 'object', objectId: 'local-obj', description: 'Object' } },
+						],
+					} ],
+					reason: 'other',
+					hitBreakpoints: [ 'bp-1' ],
+				},
+			});
+			await waitForMessage(messages, isEvent('stopped'));
+
+			session.handleMessage(makeRequest('scopes', { frameId: 0 }));
+			const scopesResp = await waitForMessage(messages, isResponse('scopes')) as DebugProtocol.ScopesResponse;
+			const localRef = scopesResp.body.scopes[0].variablesReference;
+
+			// First-level expand
+			session.handleMessage(makeRequest('variables', { variablesReference: localRef }, 10));
+			const varResp = await waitForMessage(messages, m =>
+				isResponse('variables')(m) && (m as DebugProtocol.Response).request_seq === 10
+			) as DebugProtocol.VariablesResponse;
+			const childVar = varResp.body.variables.find(v => v.name === 'child');
+			assert.ok(childVar, 'expected a "child" variable');
+			assert.ok(childVar.variablesReference > 0, '"child" must have a non-zero variablesReference');
+
+			// Second-level expand using the child reference
+			session.handleMessage(makeRequest('variables', { variablesReference: childVar.variablesReference }, 11));
+			const childVarResp = await waitForMessage(messages, m =>
+				isResponse('variables')(m) && (m as DebugProtocol.Response).request_seq === 11
+			) as DebugProtocol.VariablesResponse;
+			const valueVar = childVarResp.body.variables.find(v => v.name === 'value');
+			assert.ok(valueVar, 'expected a "value" property on the nested object');
+			assert.equal(valueVar.value, '7');
+
+			const getPropsReqs = withNested.receivedRequests.filter(r => r.method === 'Runtime.getProperties');
+			assert.ok(getPropsReqs.some(r => r.params?.objectId === 'child-obj'),
+				'should have sent Runtime.getProperties for the child objectId');
+		} finally {
+			await stopFakeServer(withNested);
+		}
+	});
+
 	it('evaluateRequest with frameId sends Debugger.evaluateOnCallFrame', async () => {
 		const withEval = await startFakeServer((req, ws) => {
 			if (req.method === 'Debugger.evaluateOnCallFrame') {
@@ -1045,6 +1203,80 @@ describe('TitaniumNextDebugSession / scopes and variables', () => {
 			assert.equal(evalReq.params?.expression, 'greeting');
 		} finally {
 			await stopFakeServer(withEval);
+		}
+	});
+
+	it('evaluateRequest returns a non-zero variablesReference for an object result', async () => {
+		const withEval = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.evaluateOnCallFrame') {
+				ws.send(JSON.stringify({ id: req.id, result: { result: { type: 'object', objectId: 'eval-obj', description: 'Object' } } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withEval.port, CLASSIC_FIXTURE);
+			serverSend(withEval, {
+				method: 'Debugger.paused',
+				params: {
+					callFrames: [ {
+						callFrameId: 'cf-eval',
+						functionName: 'fn',
+						location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+						url: '/utils.js',
+						scopeChain: [],
+					} ],
+					reason: 'other',
+					hitBreakpoints: [ 'bp-1' ],
+				},
+			});
+			await waitForMessage(messages, isEvent('stopped'));
+
+			session.handleMessage(makeRequest('evaluate', { expression: 'obj', frameId: 0, context: 'hover' }));
+			const evalResp = await waitForMessage(messages, isResponse('evaluate')) as DebugProtocol.EvaluateResponse;
+
+			assert.ok(evalResp.success);
+			assert.equal(evalResp.body.result, 'Object');
+			assert.ok(evalResp.body.variablesReference > 0, 'object result must have non-zero variablesReference');
+		} finally {
+			await stopFakeServer(withEval);
+		}
+	});
+
+	it('evaluateRequest returns an error response when CDP rejects the expression', async () => {
+		const withError = await startFakeServer((req, ws) => {
+			if (req.method === 'Debugger.evaluateOnCallFrame') {
+				ws.send(JSON.stringify({ id: req.id, error: { code: -32000, message: 'SyntaxError: Unexpected identifier' } }));
+			} else {
+				ws.send(JSON.stringify({ id: req.id, result: {} }));
+			}
+		});
+
+		try {
+			const { session, messages } = await attachSession(withError.port, CLASSIC_FIXTURE);
+			serverSend(withError, {
+				method: 'Debugger.paused',
+				params: {
+					callFrames: [ {
+						callFrameId: 'cf-eval',
+						functionName: 'fn',
+						location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+						url: '/utils.js',
+						scopeChain: [],
+					} ],
+					reason: 'other',
+					hitBreakpoints: [ 'bp-1' ],
+				},
+			});
+			await waitForMessage(messages, isEvent('stopped'));
+
+			session.handleMessage(makeRequest('evaluate', { expression: '???', frameId: 0, context: 'hover' }));
+			const evalResp = await waitForMessage(messages, isResponse('evaluate')) as DebugProtocol.Response;
+
+			assert.equal(evalResp.success, false);
+		} finally {
+			await stopFakeServer(withError);
 		}
 	});
 });
@@ -1328,5 +1560,78 @@ describe('TitaniumNextDebugSession / exception breakpoints', () => {
 		const resp = await waitForMessage(messages, isResponse('exceptionInfo')) as DebugProtocol.Response;
 
 		assert.equal(resp.success, false);
+	});
+
+	it('exceptionInfoRequest returns type as exceptionId for a primitive throw with no description', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+		await waitForCdpMethod(state, 'Debugger.enable');
+
+		serverSend(state, {
+			method: 'Debugger.paused',
+			params: {
+				callFrames: [ {
+					callFrameId: 'cf-1',
+					functionName: '',
+					location: { scriptId: 'script-1', lineNumber: 0, columnNumber: 0 },
+					url: '/utils.js',
+				} ],
+				reason: 'exception',
+				data: { type: 'number', value: 42 },
+			},
+		});
+		await waitForMessage(messages, isEvent('stopped'));
+
+		session.handleMessage(makeRequest('exceptionInfo', { threadId: 1 }));
+		const resp = await waitForMessage(messages, isResponse('exceptionInfo')) as DebugProtocol.ExceptionInfoResponse;
+
+		assert.ok(resp.success);
+		assert.equal(resp.body.exceptionId, 'number', 'exceptionId should fall back to the CDP type for primitives');
+		assert.equal(resp.body.description, '42', 'description should be the stringified value');
+	});
+
+	it('switching exception breakpoint mode in the same session sends updated CDP state each time', async () => {
+		const { session, messages } = await attachSession(state.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('setExceptionBreakpoints', { filters: [ 'all' ] }, 1));
+		await waitForMessage(messages, m => isResponse('setExceptionBreakpoints')(m) && (m as DebugProtocol.Response).request_seq === 1);
+		await waitForCdpMethod(state, 'Debugger.setPauseOnExceptions');
+
+		session.handleMessage(makeRequest('setExceptionBreakpoints', { filters: [] }, 2));
+		await waitForMessage(messages, m => isResponse('setExceptionBreakpoints')(m) && (m as DebugProtocol.Response).request_seq === 2);
+
+		await new Promise(r => setTimeout(r, 50));
+
+		const setPauseReqs = state.receivedRequests.filter(r => r.method === 'Debugger.setPauseOnExceptions');
+		assert.equal(setPauseReqs.length, 2);
+		assert.equal(setPauseReqs[0].params?.state, 'all');
+		assert.equal(setPauseReqs[1].params?.state, 'none');
+	});
+});
+
+describe('TitaniumNextDebugSession / disconnect', () => {
+	it('sends TerminatedEvent when the server closes the WebSocket (non-client-initiated)', async () => {
+		const st = await startFakeServer();
+		const { messages } = await attachSession(st.port, CLASSIC_FIXTURE);
+
+		assert.ok(st.serverWs, 'expected WebSocket to be connected');
+		st.serverWs.terminate();
+
+		await waitForMessage(messages, isEvent('terminated'));
+		await stopFakeServer(st);
+	});
+
+	it('does NOT send TerminatedEvent on a client-initiated disconnect', async () => {
+		const st = await startFakeServer();
+		const { session, messages } = await attachSession(st.port, CLASSIC_FIXTURE);
+
+		session.handleMessage(makeRequest('disconnect', { restart: false }));
+		await waitForMessage(messages, isResponse('disconnect'));
+
+		// Allow any deferred close events to settle
+		await new Promise(r => setTimeout(r, 100));
+
+		assert.ok(!messages.some(isEvent('terminated')),
+			'TerminatedEvent must not be sent when the client initiated the disconnect');
+		await stopFakeServer(st);
 	});
 });

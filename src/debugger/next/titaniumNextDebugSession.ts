@@ -86,8 +86,11 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 	}
 
 	private buildLogPointCondition(logMessage: string): string {
+		// Escape backticks and backslashes before embedding in the template literal.
 		// eslint-disable-next-line no-template-curly-in-string
-		const interpolated = logMessage.replace(/\{([^}]*)\}/g, '${$1}');
+		const escaped = logMessage.replace(/\\/g, '\\\\').replace(/`/g, '\\`');
+		// eslint-disable-next-line no-template-curly-in-string
+		const interpolated = escaped.replace(/\{([^}]*)\}/g, '${$1}');
 		return `(()=>{console.log(\`${interpolated}\`);return false})()`;
 	}
 
@@ -179,9 +182,17 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 
 				this.pausedCallFrames = params.callFrames;
 				this.pausedExceptionData = params.reason === 'exception' ? (params.data ?? null) : null;
-				const reason = params.reason === 'exception'
-					? 'exception'
-					: params.hitBreakpoints?.length ? 'breakpoint' : 'step';
+				// V8 uses 'other' for step completions and 'debugCommand' for a user-initiated
+				// pause. Map known CDP reasons to their DAP equivalents; pass through anything else.
+				const cdpToDap: Record<string, string> = { other: 'step', debugCommand: 'pause' };
+				let reason: string;
+				if (params.reason === 'exception') {
+					reason = 'exception';
+				} else if (params.hitBreakpoints?.length) {
+					reason = 'breakpoint';
+				} else {
+					reason = cdpToDap[params.reason] ?? params.reason;
+				}
 				this.logEvent(`paused: reason=${params.reason} url=${topUrl} line=${(topFrame?.location.lineNumber ?? -1) + 1}`);
 				this.sendEvent(new StoppedEvent(reason, THREAD_ID));
 			});
@@ -289,7 +300,14 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		const prevOp = this.breakpointOps.get(sourcePath) ?? Promise.resolve();
 		const nextOp = prevOp
 			.then(() => this.applyBreakpoints(connection, prev, activeBps))
-			.catch(err => this.logEvent(`applyBreakpoints: ${(err as Error).message}`));
+			.catch(err => this.logEvent(`applyBreakpoints: ${(err as Error).message}`))
+			.finally(() => {
+				// Prune the entry once settled so the map doesn't accumulate resolved
+				// Promises indefinitely across many setBreakpoints calls.
+				if (this.breakpointOps.get(sourcePath) === nextOp) {
+					this.breakpointOps.delete(sourcePath);
+				}
+			});
 		this.breakpointOps.set(sourcePath, nextOp);
 	}
 
@@ -318,7 +336,10 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 				continue;
 			}
 			const { url, line, column } = active.generatedLocation;
-			const locationKey = `${url}:${line}:${column}:${active.cdpCondition ?? ''}`;
+			// Key by location only. Including the condition would let two BPs at the same
+			// generated line produce two CDP setBreakpointByUrl calls, causing an
+			// "already exists" error from V8 on the second.
+			const locationKey = `${url}:${line}:${column}`;
 
 			const existing = locationSet.get(locationKey);
 			if (existing) {
@@ -358,14 +379,15 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		}
 	}
 
-	override configurationDoneRequest(
+	override async configurationDoneRequest(
 		response: DebugProtocol.ConfigurationDoneResponse,
 		_args: DebugProtocol.ConfigurationDoneArguments,
-	): void {
-		this.logEvent('configurationDone — releasing SDK startup wait');
-		// All domain enables and setBreakpointByUrl calls above are queued in the Titanium
-		// SDK. This message unblocks the SDK, draining the queue into V8 in arrival order —
-		// breakpoints land before any user code executes.
+	): Promise<void> {
+		this.logEvent('configurationDone — waiting for breakpoint ops then releasing SDK startup wait');
+		// Wait for all in-flight setBreakpointByUrl chains to complete before releasing
+		// the SDK. Without this await, runIfWaitingForDebugger can race ahead of the
+		// final CDP round-trips when VS Code sends setBreakpoints late in the handshake.
+		await Promise.all([ ...this.breakpointOps.values() ]);
 		this.connection?.send('Runtime.runIfWaitingForDebugger').catch(err =>
 			this.logEvent(`runIfWaitingForDebugger error: ${(err as Error).message}`)
 		);
@@ -549,7 +571,10 @@ export class TitaniumNextDebugSession extends LoggingDebugSession {
 		}
 		const description = data.description ?? (data.value !== undefined ? String(data.value) : undefined);
 		const variablesReference = data.objectId ? this.allocHandle(data.objectId) : 0;
-		const breakMode: DebugProtocol.ExceptionBreakMode = this.exceptionBreakMode === 'all' ? 'always' : 'unhandled';
+		const breakModeMap: Record<typeof this.exceptionBreakMode, DebugProtocol.ExceptionBreakMode> = {
+			all: 'always', uncaught: 'unhandled', none: 'never',
+		};
+		const breakMode = breakModeMap[this.exceptionBreakMode];
 		response.body = {
 			exceptionId: data.description?.match(/^[^:]+/)?.[0] ?? data.type,
 			description,

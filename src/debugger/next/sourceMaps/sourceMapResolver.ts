@@ -13,26 +13,32 @@ interface MapEntry {
 	rawSources: string[];
 }
 
-interface ResolvedScript {
+interface ResolvedScriptBase {
 	v8url: string;
 	generatedFile: string;
 	userSources: string[];
-	inline: MapEntry;
-	// Set when Alloy's two-stage chain is in use (app.js). For most Alloy
-	// artifacts inline's mappings already use the user source's line space and
-	// only the source name is taken from the sidecar (see initScripts comment).
-	alloy?: MapEntry;
-	// Lookup tables built once per script depending on the chosen strategy.
-	// `simple` is the same-length index-correspondence between inline and alloy
-	// source arrays. `chain` uses the alloy map for sourceToGenerated forward
-	// lookups and the inline map's single source for the babel-output reverse.
-	strategy: 'simple' | 'chain';
 	sourceByInlineKey: Map<string, string>;
 	inlineKeyBySource: Map<string, string>;
-	// Chain-only: name of the inline source that represents the alloy
-	// intermediate (e.g. 'app.js'). There's exactly one in this case.
-	chainInlineKey?: string;
 }
+
+// One-stage lookup: inline map (or sidecar when source counts match) maps
+// directly to user source line/col space.
+interface SimpleScript extends ResolvedScriptBase {
+	strategy: 'simple';
+	inline: MapEntry;
+}
+
+// Two-stage lookup: inline map bridges the babel intermediate; sidecar maps
+// the intermediate to the user source. Used for app.js in Alloy projects.
+interface ChainScript extends ResolvedScriptBase {
+	strategy: 'chain';
+	inline: MapEntry;
+	alloy: MapEntry;
+	// Name of the inline source representing the alloy intermediate (e.g. 'app.js').
+	chainInlineKey: string;
+}
+
+type ResolvedScript = SimpleScript | ChainScript;
 
 const ANDROID_ASSETS_REL = [ 'build', 'android', 'assets' ];
 const ANDROID_MAP_REL = [ 'build', 'map', 'Resources', 'android' ];
@@ -49,6 +55,9 @@ export class SourceMapResolver {
 	private readonly assetByV8url = new Map<string, string>();
 
 	async init(projectRoot: string, platform: Platform): Promise<void> {
+		if (this.scripts.size > 0) {
+			throw new Error('SourceMapResolver.init() called twice; call dispose() first');
+		}
 		if (platform !== 'android') {
 			throw new Error(`SourceMapResolver: only 'android' is supported in Phase 1c; got '${platform}'`);
 		}
@@ -118,8 +127,7 @@ export class SourceMapResolver {
 		if (inlinePos.line === null) {
 			return null;
 		}
-		const alloy = script.alloy as MapEntry;
-		const alloyPos = alloy.consumer.originalPositionFor({
+		const alloyPos = script.alloy.consumer.originalPositionFor({
 			line: inlinePos.line,
 			column: inlinePos.column ?? 0,
 		});
@@ -156,14 +164,12 @@ export class SourceMapResolver {
 				results.push({ url: script.v8url, line: pos.line, column: pos.column ?? 0 });
 				continue;
 			}
-			const alloy = script.alloy as MapEntry;
-			const intermediatePos = alloy.consumer.generatedPositionFor({ source: key, line, column, bias: SourceMapConsumer.LEAST_UPPER_BOUND });
+			const intermediatePos = script.alloy.consumer.generatedPositionFor({ source: key, line, column, bias: SourceMapConsumer.LEAST_UPPER_BOUND });
 			if (intermediatePos.line === null) {
 				continue;
 			}
-			const inlineKey = script.chainInlineKey as string;
 			const genPos = script.inline.consumer.generatedPositionFor({
-				source: inlineKey,
+				source: script.chainInlineKey,
 				line: intermediatePos.line,
 				column: intermediatePos.column ?? 0,
 				bias: SourceMapConsumer.LEAST_UPPER_BOUND,
@@ -194,7 +200,9 @@ export class SourceMapResolver {
 	dispose(): void {
 		for (const script of this.scripts.values()) {
 			script.inline.consumer.destroy();
-			script.alloy?.consumer.destroy();
+			if (script.strategy === 'chain') {
+				script.alloy.consumer.destroy();
+			}
 		}
 		this.scripts.clear();
 		this.scriptsBySource.clear();
@@ -231,7 +239,7 @@ export class SourceMapResolver {
 		return this.buildChain(v8url, generatedFile, inline, alloy);
 	}
 
-	private buildSimple(v8url: string, generatedFile: string, inline: MapEntry, sourceMap: MapEntry): ResolvedScript {
+	private buildSimple(v8url: string, generatedFile: string, inline: MapEntry, sourceMap: MapEntry): SimpleScript {
 		// Prefer the sidecar as the lookup consumer when one is available. Alloy
 		// controller inline maps can have column-precise generatedPositionFor
 		// entries while omitting the per-line segments originalPositionFor needs,
@@ -263,7 +271,7 @@ export class SourceMapResolver {
 		};
 	}
 
-	private buildChain(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry): ResolvedScript {
+	private buildChain(v8url: string, generatedFile: string, inline: MapEntry, alloy: MapEntry): ChainScript {
 		const alloySources = alloy.consumer.sources;
 		const sourceByInlineKey = new Map<string, string>();
 		const inlineKeyBySource = new Map<string, string>();
@@ -294,20 +302,27 @@ async function loadMapEntry(raw: RawSourceMap): Promise<MapEntry> {
 }
 
 async function tryReadRawMap(p: string): Promise<RawSourceMap | null> {
+	let text: string;
 	try {
-		const text = await fs.readFile(p, 'utf8');
-		return JSON.parse(text) as RawSourceMap;
-	} catch {
-		return null;
+		text = await fs.readFile(p, 'utf8');
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+			return null;
+		}
+		throw err;
 	}
+	return JSON.parse(text) as RawSourceMap;
 }
 
 async function walkJs(dir: string): Promise<string[]> {
 	let entries: Dirent[];
 	try {
 		entries = await fs.readdir(dir, { withFileTypes: true, recursive: true });
-	} catch {
-		return [];
+	} catch (err) {
+		if ([ 'ENOENT', 'ENOTDIR' ].includes((err as NodeJS.ErrnoException).code ?? '')) {
+			return [];
+		}
+		throw err;
 	}
 	const results: string[] = [];
 	for (const entry of entries) {
